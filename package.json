@@ -1,0 +1,10 @@
+{
+  "name": "health-intake-api",
+  "version": "1.0.0",
+  "description": "Serverless API: health form submission → Claude analysis → GitHub report",
+  "private": true,
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {}
+}
