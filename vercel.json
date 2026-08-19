@@ -1,7 +1,8 @@
 {
   "functions": {
-    "api/submit.js": {
-      "maxDuration": 60
-    }
+    "api/submit.js": { "maxDuration": 60 },
+    "api/report.js": { "maxDuration": 15 },
+    "api/lookup.js": { "maxDuration": 15 },
+    "api/admin.js":  { "maxDuration": 15 }
   }
 }

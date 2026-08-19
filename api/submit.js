@@ -2,12 +2,15 @@
 // Receives form data, calls Claude API, generates report, pushes to GitHub
 
 const https = require('https');
+const crypto = require('crypto');
+const { pushFile: pushPrivate, getIndex: getPrivateIndex, cors } = require('../lib/github');
 
 // ─── CONFIG ────────────────────────────────────────────────────────────────
 
 const GITHUB_REPO = 'johnnnyay/product-marketing';
 const CALC_BASE = 'https://johnnnyay.github.io/product-marketing/#s=';
-const REPORT_BASE = 'https://johnnnyay.github.io/product-marketing/reports/';
+// Reports are served through this API from a private repo, never as public files.
+const REPORT_BASE = (process.env.API_BASE || 'https://health-intake-api.vercel.app') + '/api/report?r=';
 
 // ─── SYSTEM PROMPT (knowledge base) ────────────────────────────────────────
 
@@ -489,9 +492,7 @@ function formatForm(form) {
 // ─── MAIN HANDLER ────────────────────────────────────────────────────────────
 
 module.exports = async function handler(req, res) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Intake-Secret');
+  cors(req, res);
 
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
@@ -509,12 +510,15 @@ module.exports = async function handler(req, res) {
       return res.status(400).json({ error: 'Missing required fields: name, dob, gender' });
     }
 
-    // Build client key and filename
+    // Client key stays human-readable (it is the my-report lookup key, and it never
+    // leaves the server). The stored filename is a random token so that reports are
+    // not enumerable even if a link leaks.
     const nameParts = form.name.trim().split(/\s+/);
     const initials = nameParts.map(w => w[0].toUpperCase()).join('');
     const key = `${initials}_${form.dob}`;
     const assessmentDate = new Date().toISOString().split('T')[0];
-    const filename = `${key}_${assessmentDate}.html`;
+    const rid = crypto.randomBytes(12).toString('hex');
+    const filename = `${rid}.html`;
     const repoPath = `reports/${filename}`;
 
     // Format form data for Claude
@@ -535,17 +539,18 @@ module.exports = async function handler(req, res) {
     // Build HTML
     const html = buildHTML(reportData, form, filename, assessmentDate);
 
-    // Push report HTML to GitHub
-    await pushFile(repoPath, html, `Add health report: ${form.name} (${assessmentDate})`);
+    // Push report HTML to the PRIVATE reports repo
+    await pushPrivate(repoPath, html, `Add health report: ${form.name} (${assessmentDate})`);
 
-    // Update index.json
-    const index = await getIndexJSON();
+    // Update the private index
+    const index = await getPrivateIndex();
     const newEntry = {
       name: form.name,
       initials,
       dob: form.dob,
       reports: [{
         date: assessmentDate,
+        rid,
         file: filename,
         signals: reportData.signals.map(s => s.name),
         products: reportData.products.map(p => p.name),
@@ -560,10 +565,10 @@ module.exports = async function handler(req, res) {
       index.clients[key] = newEntry;
     }
 
-    await pushFile('reports/index.json', JSON.stringify(index, null, 2), `Update index: ${key}`);
+    await pushPrivate('index.json', JSON.stringify(index, null, 2), `Update index: ${key}`);
 
-    const reportUrl = `${REPORT_BASE}${filename}`;
-    return res.status(200).json({ success: true, reportUrl, key, filename });
+    const reportUrl = `${REPORT_BASE}${rid}`;
+    return res.status(200).json({ success: true, reportUrl, key, rid });
 
   } catch (err) {
     console.error('Report generation error:', err);
