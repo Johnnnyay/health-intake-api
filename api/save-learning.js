@@ -6,7 +6,7 @@ const crypto = require('crypto');
 const { ghRequest, cors } = require('../lib/github');
 
 const HUB_REPO = process.env.HUB_REPO || 'Johnnnyay/diamond-hq';
-const PATH = 'data/learning.json';
+const PATH = (t) => 'data/learning-' + t + '.json';
 
 function safeEqual(a, b) {
   const ab = Buffer.from(String(a)), bb = Buffer.from(String(b));
@@ -26,20 +26,20 @@ module.exports = async (req, res) => {
   }
 
   const body = req.body;
-  if (!body || !body.tabs || typeof body.tabs !== 'object') {
-    return res.status(400).json({ error: 'Expected a learning document with a tabs object.' });
+  if (!body || !body.tab || !/^[a-z0-9-]{1,32}$/.test(body.tab) || !Array.isArray(body.chapters)) {
+    return res.status(400).json({ error: 'Expected { tab, title, chapters[] }.' });
   }
-  // Guard against an empty payload wiping the file
-  const chapters = Object.values(body.tabs).reduce((n, t) => n + ((t.chapters || []).length), 0);
+  const chapters = body.chapters.length;
   if (chapters === 0) return res.status(400).json({ error: 'Refusing to save: no chapters in the payload.' });
+  const path = PATH(body.tab);
 
   try {
-    const head = await ghRequest('GET', PATH, null, HUB_REPO);
+    const head = await ghRequest('GET', path, null, HUB_REPO);
     const sha = head.status === 200 ? head.data.sha : undefined;
-    body.meta = Object.assign({}, body.meta, { savedAt: new Date().toISOString(), savedFrom: 'hub' });
+    body.savedAt = new Date().toISOString(); body.savedFrom = 'hub';
 
-    const put = await ghRequest('PUT', PATH, {
-      message: 'Learning & Teaching: content edited in the hub',
+    const put = await ghRequest('PUT', path, {
+      message: 'Learning & Teaching: ' + body.tab + ' edited in the hub',
       content: Buffer.from(JSON.stringify(body, null, 1)).toString('base64'),
       branch: 'main',
       ...(sha ? { sha } : {})
