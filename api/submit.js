@@ -12,29 +12,59 @@ const CALC_BASE = 'https://johnnnyay.github.io/product-marketing/#s=';
 // Reports are served through this API from a private repo, never as public files.
 const REPORT_BASE = (process.env.API_BASE || 'https://health-intake-api.vercel.app') + '/api/report?r=';
 
+// ─── PRODUCT CATALOGUE (fetched at request time — never hardcoded) ─────────
+
+const SITE = 'https://johnnnyay.github.io/product-marketing';
+
+function getJSON(url) {
+  return new Promise((resolve, reject) => {
+    https.get(url, (res) => {
+      let d = '';
+      res.on('data', c => d += c);
+      res.on('end', () => { try { resolve(JSON.parse(d)); } catch (e) { reject(e); } });
+    }).on('error', reject);
+  });
+}
+
+// Build the product menu from the live catalogue. Every product the site sells is
+// eligible; the model picks from all of them, not from a frozen shortlist.
+async function buildCatalogue() {
+  const [prod, details, protocol] = await Promise.all([
+    getJSON(SITE + '/data/products.json'),
+    getJSON(SITE + '/details.json').catch(() => ({})),
+    getJSON(SITE + '/protocol.json').catch(() => ({}))
+  ]);
+  const items = (prod.products || []).filter(p => p.cat === 'nutrition' || (p.areas || []).length);
+  const lines = items.map(p => {
+    const d = details[p.id] || {};
+    const who = (d.who || '').replace(/\s+/g, ' ').slice(0, 180);
+    const adv = (d.advantage || p.tagline || '').replace(/\s+/g, ' ').slice(0, 180);
+    return `- ${p.id} | ${p.name} | areas: ${(p.areas || []).join(',') || 'general'}`
+      + ` | $${p.iboPrice || '?'} IBO / $${p.retailPrice || '?'} retail | ${p.pv || 0} PV`
+      + ` | ${p.daysSupply || '?'} days | ${adv}${who ? ' | best for: ' + who : ''}`;
+  });
+  const stages = (protocol.stages || []).map(s =>
+    `${s.glyph}. ${s.zh} ${s.label} — ${s.sub}`).join('\n');
+  return { menu: lines.join('\n'), count: items.length, stages,
+           areas: protocol.areas ? Object.keys(protocol.areas).join(', ') : '' };
+}
+
 // ─── SYSTEM PROMPT (knowledge base) ────────────────────────────────────────
 
-const SYSTEM = `You are a health assessment analyst for a Nutrilite wellness consultant named Johnny Huang (johnnnyay.github.io/product-marketing).
+const SYSTEM_BASE = `You are a health assessment analyst for a Nutrilite wellness consultant named Johnny Huang (johnnnyay.github.io/product-marketing).
 
 Given a client's health questionnaire responses, identify the top 3 most clinically significant symptom CLUSTERS, perform root cause analysis, and recommend up to 2 Nutrilite products.
 
 ASSESSMENT FRAMEWORK (损伤 to 修复 to 原料 to 营养素):
 Every signal traces: symptom cluster → body system under-supported → missing nutrient or mechanism → product that delivers targeted support.
 
-PRODUCT DATABASE (use exact IDs in calcUrl):
-- probiotic | Probiotic | 6.3B CFU | gut dysbiosis root cause: diarrhea, gas, poor digestion, bad breath, dandruff, athlete's foot, frequent colds, nasal allergies, weak immunity. Best when 3+ gut symptoms rated Often AND/OR immune cluster present.
-- vitamin-c-extended-release-180ct | Vitamin C Extended Release | 8-hour slow release | mucosal immune gap: frequent colds, cough, runny nose, sneezing, nasal allergies. Best when 3+ respiratory/immune symptoms rated Often.
-- advanced-omega | Advanced Omega | rTG fish oil (3x absorption) | omega-3 deficit and inflammation: joint pain, heavy menstrual flow, PMS, brain fog, dry skin, heart health. Best when joint pain Often OR heavy flow + PMS cluster present.
-- magnesium | Magnesium | TRAACS chelated | nervous system and sleep: 1-3 AM waking, restless sleep, anxiety, heart palpitations, muscle cramps, cold sweaty hands, mental tension. Best when 1-3 AM waking confirmed OR 3+ nervous system symptoms Often.
-- prebiotic-fiber | Prebiotic Fiber | inulin blend | fiber deficit and metabolic: constipation, high visceral fat (>10), blood sugar instability, low produce intake. Best when constipation Often OR visceral fat >10 OR <2 F&V servings/day.
-- double-x-multivitamin-31-day-refill | Double X Multivitamin | 12 vitamins, 10 minerals, 10 plant concentrates | comprehensive gap: fatigue, poor diet quality, multiple Often symptoms across 3+ categories, heavy stress load. Best when no clear single-organ target but broad deficiency pattern.
-- digestive-enzyme | Digestive Enzyme | protease, lipase, amylase | enzyme insufficiency: bloating immediately after meals, heartburn, reflux, inability to digest heavy/greasy meals. Best when bloating or reflux rated Often.
-- plant-protein-powder | Plant Protein Powder | 20g pea and rice protein | protein deficit: low protein intake, breakfast skipping, muscle loss risk, low body weight, anemia signals. Best when no protein at breakfast AND weight is low OR lean mass is low.
-- sleep-gummies | Sleep Gummies | melatonin + L-theanine | sleep onset difficulty: hard to fall asleep, racing mind, severe sleep debt. Best when hard-to-fall-asleep is Often AND 1-3 AM waking is absent (distinguishes from magnesium case).
-- womens-daily-multivitamin | Women's Daily Multivitamin | iron, calcium, folate, D3 | women's gap: heavy menstrual flow, fatigue, PMS, bone concerns, iron signals. Best for women with heavy flow + fatigue combination.
+PRODUCT DATABASE:
+The full catalogue is supplied below under CATALOGUE. Use the exact product id from it in calcUrl.
+You may recommend ANY product in that catalogue. There is no shortlist.
 
 PRODUCT SELECTION RULES:
-- Maximum 2 products. Choose the ones that address the ROOT CAUSE of the most symptom clusters, not just the most symptoms.
+- Maximum 2 products, chosen from the WHOLE catalogue. Address the ROOT CAUSE of the most symptom clusters, not the most symptoms.
+- BUDGET IS PER CLIENT. If the intake shows a budget or the answers suggest cost sensitivity, choose within it and say so in the rationale. This is a judgement made for THIS client only. It never narrows what a future client can be offered.
 - Probiotic + Vitamin C is appropriate when gut-immune axis is the dominant pattern.
 - Magnesium + Advanced Omega is appropriate when sleep/nervous system + inflammation are the two dominant clusters.
 - Never recommend both Probiotic and Digestive Enzyme (redundant).
@@ -135,7 +165,7 @@ async function getIndexJSON() {
 
 // ─── ANTHROPIC API CALL ──────────────────────────────────────────────────────
 
-function callClaude(formText) {
+function callClaude(formText, SYSTEM) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   const payload = JSON.stringify({
     model: 'claude-haiku-4-5-20251001',
@@ -524,8 +554,12 @@ module.exports = async function handler(req, res) {
     // Format form data for Claude
     const formText = formatForm(form);
 
-    // Call Claude
-    const rawJson = await callClaude(formText);
+    // Call Claude with the live catalogue and the 清调补养 stages
+    const cat = await buildCatalogue();
+    const SYSTEM = SYSTEM_BASE
+      + `\n\nCATALOGUE (${cat.count} products — recommend from ANY of these):\n${cat.menu}`
+      + (cat.stages ? `\n\n清调补养 — frame the plan in these four stages:\n${cat.stages}` : '');
+    const rawJson = await callClaude(formText, SYSTEM);
 
     // Parse JSON (handle code fences if present)
     let reportData;
