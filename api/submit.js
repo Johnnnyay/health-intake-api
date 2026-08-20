@@ -3,7 +3,7 @@
 
 const https = require('https');
 const crypto = require('crypto');
-const { pushFile: pushPrivate, getIndex: getPrivateIndex, cors } = require('../lib/github');
+const { pushFile: pushPrivate, getIndex: getPrivateIndex, getFile: getPrivateFile, cors } = require('../lib/github');
 
 // ─── CONFIG ────────────────────────────────────────────────────────────────
 
@@ -49,65 +49,26 @@ async function buildCatalogue() {
            areas: protocol.areas ? Object.keys(protocol.areas).join(', ') : '' };
 }
 
-// ─── SYSTEM PROMPT (knowledge base) ────────────────────────────────────────
+// ─── REPORT SPEC (single source of truth, fetched at request time) ─────────
+//
+// The analysis rules, the 清调补养 plan structure, the compliance guardrails and the
+// output schema all live in ONE file: report-spec.md in the private health-reports repo.
+// This function is the only way they enter the system. Do not paste a copy back in here.
+// To change how reports are written, edit report-spec.md in Claude Code and push.
 
-const SYSTEM_BASE = `You are a health assessment analyst for a Nutrilite wellness consultant named Johnny Huang (johnnnyay.github.io/product-marketing).
+let _specCache = { text: null, at: 0 };
+const SPEC_TTL_MS = 5 * 60 * 1000;
 
-Given a client's health questionnaire responses, identify the top 3 most clinically significant symptom CLUSTERS, perform root cause analysis, and recommend up to 2 Nutrilite products.
-
-ASSESSMENT FRAMEWORK (损伤 to 修复 to 原料 to 营养素):
-Every signal traces: symptom cluster → body system under-supported → missing nutrient or mechanism → product that delivers targeted support.
-
-PRODUCT DATABASE:
-The full catalogue is supplied below under CATALOGUE. Use the exact product id from it in calcUrl.
-You may recommend ANY product in that catalogue. There is no shortlist.
-
-PRODUCT SELECTION RULES:
-- Maximum 2 products, chosen from the WHOLE catalogue. Address the ROOT CAUSE of the most symptom clusters, not the most symptoms.
-- BUDGET IS PER CLIENT. If the intake shows a budget or the answers suggest cost sensitivity, choose within it and say so in the rationale. This is a judgement made for THIS client only. It never narrows what a future client can be offered.
-- Probiotic + Vitamin C is appropriate when gut-immune axis is the dominant pattern.
-- Magnesium + Advanced Omega is appropriate when sleep/nervous system + inflammation are the two dominant clusters.
-- Never recommend both Probiotic and Digestive Enzyme (redundant).
-- If only 1 product is clearly indicated, recommend only 1.
-
-SIGNAL IDENTIFICATION RULES:
-- A cluster of 3+ "Often" symptoms in the same category = strong signal.
-- 1-3 AM waking confirmed = always top-3 signal regardless of other symptoms.
-- Gut symptoms (digestion, gas, diarrhea, bad breath) + immune symptoms (colds, allergies, cough) together = gut-immune axis signal, treat as one compound signal.
-- Body composition: visceral fat >10, body fat >25% male or >32% female, body water <58%, metabolic age >actual age = each counts as a signal.
-- Lifestyle factors that compound symptoms (cold food + gut issues, after-midnight sleep + 1-3 AM waking, breakfast skipping + afternoon fatigue) must be explicitly named in the RCA.
-
-WRITING RULES:
-- Never use em-dashes. Use commas, periods, or "and" or "but" instead.
-- Be specific and mechanistic. Reference the client's actual data (e.g., "At 75kg consuming 1.5L of water, you are mildly dehydrated").
-- Every claim needs a mechanism. Not "omega-3 helps inflammation" but "the high-meat diet creates a predictable omega-6 to omega-3 imbalance that tips the prostaglandin pathway toward pro-inflammatory signaling, which shows up first in joints."
-- Tone: confident, clinical, warm. Like a knowledgeable friend who happens to be a doctor.
-- Plan items: specific and behavioral, not vague. "Add one vegetable to every meal" not "eat more vegetables."
-- RCA sections: 4-6 sentences each.
-- No marketing language. No "powerful antioxidant" or "boost your immunity."
-
-OUTPUT: Return ONLY valid JSON. No markdown, no explanation, no other text. Exactly this schema:
-{
-  "signals": [
-    {"name": "Signal name (5-8 words)", "badge": "Badge text (3-4 words)", "description": "2-3 sentences: what data points form this signal and why it matters."}
-  ],
-  "bodyCompNote": "2-3 sentences interpreting body composition holistically. Name what is strong. Name what needs attention. Reference specific numbers.",
-  "rcaSections": [
-    {"label": "Section label (matches signal)", "text": "4-6 sentences: root cause, mechanism, why it shows up this way in this specific person, what it means going forward."}
-  ],
-  "summary": "3-4 sentences. Open with a genuine strength. Name the pattern. End with why now is the right time to act.",
-  "plan": [
-    {"label": "Priority label", "items": ["Specific action with reason", "Specific action with reason", "Specific action with reason"]}
-  ],
-  "products": [
-    {"id": "exact-product-id", "name": "Product Display Name", "rationale": "4-6 sentences connecting this client's specific data to this product's specific mechanism. Not generic. Reference actual symptom values.", "note": "1-2 sentence usage note: when to take, with what, what to expect and when."}
-  ],
-  "wins": ["Expected win 1 with timeframe", "Expected win 2 with timeframe", "Expected win 3", "Expected win 4", "Expected win 5", "Expected win 6"],
-  "optionA": "2-3 sentences: lifestyle-only path with what to expect at 4 weeks.",
-  "optionB": "2-3 sentences: lifestyle + products path and why the combination addresses the root cause faster.",
-  "recheckItems": "Comma-separated list of 6-8 specific metrics to track at the 4-week check-in",
-  "calcUrl": "https://johnnnyay.github.io/product-marketing/#s=product-id:1 or product-id-1:1,product-id-2:1"
-}`;
+async function fetchSpec() {
+  if (_specCache.text && Date.now() - _specCache.at < SPEC_TTL_MS) return _specCache.text;
+  const text = await getPrivateFile('report-spec.md');   // returns string | null
+  if (!text) {
+    if (_specCache.text) return _specCache.text;   // serve stale rather than fail
+    throw new Error('report-spec.md unavailable from the private reports repo');
+  }
+  _specCache = { text, at: Date.now() };
+  return text;
+}
 
 // ─── GITHUB HELPERS ─────────────────────────────────────────────────────────
 
@@ -278,13 +239,44 @@ function buildHTML(r, form, filename, assessmentDate) {
       <div class="rca-text">${s.text}</div>
     </div>`).join('');
 
-  const planHTML = r.plan.map((p, i) => `
-    <div class="plan-priority">
-      <div class="plan-priority-label"><span class="plan-num">${i + 1}</span>${p.label}</div>
+  // 清调补养 — always four stages, always in order. Falls back to a legacy flat plan.
+  const STAGE_META = {
+    '清': { label: 'Clear',      sub: '清肠毒 · 清血毒' },
+    '调': { label: 'Regulate',   sub: '调生活方式 · 调五脏六腑' },
+    '补': { label: 'Replenish',  sub: '补细胞营养 · 补隐性饥饿' },
+    '养': { label: 'Sustain',    sub: '四季时令 · 子午流注' }
+  };
+  const stages = Array.isArray(r.stages) && r.stages.length
+    ? r.stages
+    : (r.plan || []).map((p, i) => ({
+        glyph: ['清', '调', '补', '养'][i] || '养',
+        label: p.label, focus: '', items: p.items, horizon: ''
+      }));
+
+  const planHTML = stages.map(st => {
+    const meta = STAGE_META[st.glyph] || { label: st.label || '', sub: '' };
+    return `
+    <div class="stage">
+      <div class="stage-head">
+        <span class="stage-glyph">${st.glyph || ''}</span>
+        <span class="stage-titles">
+          <span class="stage-label">${st.label || meta.label}</span>
+          <span class="stage-sub">${meta.sub}</span>
+        </span>
+      </div>
+      ${st.focus ? `<div class="stage-focus">${st.focus}</div>` : ''}
       <ul class="plan-items">
-        ${p.items.map(item => `<li>${item}</li>`).join('\n        ')}
+        ${(st.items || []).map(item => `<li>${item}</li>`).join('\n        ')}
       </ul>
-    </div>`).join('');
+      ${st.horizon ? `<div class="stage-horizon">${st.horizon}</div>` : ''}
+    </div>`;
+  }).join('');
+
+  const tierHTML = r.tier ? `
+    <div class="tier-note">
+      <span class="tier-badge tier-${String(r.tier).toLowerCase()}">Tier ${r.tier}</span>
+      <span>${r.tierNote || ''}</span>
+    </div>` : '';
 
   const productsHTML = r.products.map(p => `
     <div class="product-card">
@@ -338,8 +330,23 @@ function buildHTML(r, form, filename, assessmentDate) {
   .rca-dot{width:6px;height:6px;border-radius:50%;background:var(--green);flex-shrink:0}
   .rca-text{font-size:13.5px;color:var(--gray-600);line-height:1.65}
   .summary-box{background:var(--green-light);border-left:3px solid var(--green);border-radius:0 var(--radius) var(--radius) 0;padding:16px 18px;font-size:14px;color:var(--gray-800);line-height:1.65}
-  .plan-priority{margin-bottom:18px}.plan-priority:last-child{margin-bottom:0}
-  .plan-priority-label{font-size:13px;font-weight:600;color:var(--navy);margin-bottom:6px;display:flex;align-items:center;gap:6px}
+  .card-title-zh{font-weight:500;color:var(--green-mid);letter-spacing:.14em;margin-left:8px;font-size:12px}
+  .tier-note{display:flex;align-items:baseline;gap:8px;font-size:12.5px;color:var(--gray-600);
+    line-height:1.5;margin-bottom:16px;padding-bottom:14px;border-bottom:1px solid var(--gray-200)}
+  .tier-badge{flex-shrink:0;font-size:10.5px;font-weight:700;letter-spacing:.06em;border-radius:5px;
+    padding:2px 7px;background:var(--green-light);color:var(--green)}
+  .tier-b{background:#fff4e5;color:#a65b00}.tier-c{background:#fdecec;color:#b3261e}
+  .stage{margin-bottom:20px;padding-left:14px;border-left:2px solid var(--green-light)}
+  .stage:last-child{margin-bottom:0}
+  .stage-head{display:flex;align-items:center;gap:9px;margin-bottom:5px}
+  .stage-glyph{flex-shrink:0;width:26px;height:26px;border-radius:7px;background:var(--green-light);
+    color:var(--green);font-size:14px;font-weight:700;display:flex;align-items:center;justify-content:center}
+  .stage-titles{display:flex;flex-direction:column;line-height:1.3}
+  .stage-label{font-size:13px;font-weight:600;color:var(--navy)}
+  .stage-sub{font-size:10.5px;color:var(--gray-500,#8a8f98);letter-spacing:.04em}
+  .stage-focus{font-size:12.5px;color:var(--gray-600);line-height:1.55;margin:0 0 6px 35px;font-style:italic}
+  .stage .plan-items{margin-left:35px}
+  .stage-horizon{font-size:11.5px;color:var(--green-mid);margin:7px 0 0 35px;font-weight:500}
   .plan-num{background:var(--green-light);color:var(--green);border-radius:6px;padding:1px 7px;font-size:11px;font-weight:700}
   .plan-items{list-style:none;padding:0}
   .plan-items li{font-size:13.5px;color:var(--gray-600);padding:4px 0 4px 16px;position:relative;line-height:1.55}
@@ -414,7 +421,8 @@ function buildHTML(r, form, filename, assessmentDate) {
   </div>
 
   <div class="card">
-    <div class="card-title">30-Day Plan</div>
+    <div class="card-title">Your Plan <span class="card-title-zh">清 · 调 · 补 · 养</span></div>
+    ${tierHTML}
     ${planHTML}
   </div>
 
@@ -556,9 +564,10 @@ module.exports = async function handler(req, res) {
 
     // Call Claude with the live catalogue and the 清调补养 stages
     const cat = await buildCatalogue();
-    const SYSTEM = SYSTEM_BASE
-      + `\n\nCATALOGUE (${cat.count} products — recommend from ANY of these):\n${cat.menu}`
-      + (cat.stages ? `\n\n清调补养 — frame the plan in these four stages:\n${cat.stages}` : '');
+    const spec = await fetchSpec();
+    const SYSTEM = spec
+      + `\n\n---\n\nCATALOGUE (${cat.count} products — recommend from ANY of these):\n${cat.menu}`
+      + (cat.stages ? `\n\n清调补养 stage definitions from the live site:\n${cat.stages}` : '');
     const rawJson = await callClaude(formText, SYSTEM);
 
     // Parse JSON (handle code fences if present)
