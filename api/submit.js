@@ -338,7 +338,7 @@ function buildHTML(r, form, filename, assessmentDate) {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Health Progress Report — ${form.name}</title>
+<title>Health Progress Report for ${form.name}</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Caveat:wght@500;600&display=swap" rel="stylesheet">
 <style>
@@ -487,11 +487,11 @@ function buildHTML(r, form, filename, assessmentDate) {
     <div class="card-title">Next Step</div>
     <div class="next-steps-grid">
       <div class="next-step-box">
-        <div class="next-step-label">Option A — Lifestyle Only</div>
+        <div class="next-step-label">Option A: Lifestyle Only</div>
         <div class="next-step-text">${r.optionA}</div>
       </div>
       <div class="next-step-box">
-        <div class="next-step-label">Option B — Lifestyle + Support</div>
+        <div class="next-step-label">Option B: Lifestyle + Support</div>
         <div class="next-step-text">${r.optionB}</div>
       </div>
     </div>
