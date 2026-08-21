@@ -563,12 +563,24 @@ module.exports = async function handler(req, res) {
     const formText = formatForm(form);
 
     // Call Claude with the live catalogue and the 清调补养 stages
-    const cat = await buildCatalogue();
-    const spec = await fetchSpec();
-    const SYSTEM = spec
-      + `\n\n---\n\nCATALOGUE (${cat.count} products — recommend from ANY of these):\n${cat.menu}`
-      + (cat.stages ? `\n\n清调补养 stage definitions from the live site:\n${cat.stages}` : '');
-    const rawJson = await callClaude(formText, SYSTEM);
+    // Two ways to get the analysis, one renderer and one store for both.
+    //
+    //  a) form only            -> the API calls Claude itself (client self-serve via the web form).
+    //                             Needs ANTHROPIC_API_KEY.
+    //  b) form + analysis      -> the caller already applied report-spec.md and passes the result.
+    //                             Used to regenerate reports in batch when the spec changes.
+    //                             Needs no Anthropic key at all.
+    let rawJson;
+    if (form.analysis && typeof form.analysis === 'object') {
+      rawJson = JSON.stringify(form.analysis);
+    } else {
+      const cat = await buildCatalogue();
+      const spec = await fetchSpec();
+      const SYSTEM = spec
+        + `\n\n---\n\nCATALOGUE (${cat.count} products — recommend from ANY of these):\n${cat.menu}`
+        + (cat.stages ? `\n\n清调补养 stage definitions from the live site:\n${cat.stages}` : '');
+      rawJson = await callClaude(formText, SYSTEM);
+    }
 
     // Parse JSON (handle code fences if present)
     let reportData;
@@ -585,6 +597,17 @@ module.exports = async function handler(req, res) {
     // Push report HTML to the PRIVATE reports repo
     await pushPrivate(repoPath, html, `Add health report: ${form.name} (${assessmentDate})`);
 
+    // Persist the raw intake next to the report. This is what makes a report reproducible:
+    // when report-spec.md changes, every past report can be regenerated from its own intake
+    // instead of being re-derived from email. Same private repo, same access control.
+    const { analysis: _omit, ...rawIntake } = form;
+    await pushPrivate(`intake/${rid}.json`, JSON.stringify({
+      rid, key, name: form.name, dob: form.dob, assessmentDate,
+      generatedBy: form.analysis ? 'batch' : 'api',
+      specVersion: form.specVersion || null,
+      intake: rawIntake
+    }, null, 2), `Store intake for ${form.name} (${assessmentDate})`);
+
     // Update the private index
     const index = await getPrivateIndex();
     const newEntry = {
@@ -597,6 +620,9 @@ module.exports = async function handler(req, res) {
         file: filename,
         signals: reportData.signals.map(s => s.name),
         products: reportData.products.map(p => p.name),
+        tier: reportData.tier || null,
+        specVersion: form.specVersion || null,
+        generatedBy: form.analysis ? 'batch' : 'api',
         consultant: 'Johnny/Irene'
       }]
     };
