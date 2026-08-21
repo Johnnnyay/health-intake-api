@@ -579,6 +579,24 @@ function formatForm(form) {
   if (form.supplementFreq) lines.push(`Supplement consistency: ${form.supplementFreq}`);
   if (form.notes) lines.push(`Additional notes: ${form.notes}`);
 
+  // Pass through everything not explicitly formatted above. Intake forms change and fields
+  // get added, and silently dropping them means the model reasons on partial data. Budget
+  // and medications in particular drive rules in the spec, so losing them changes the report.
+  const KNOWN = new Set(['name', 'email', 'dob', 'gender', 'height', 'weight', 'weightKg',
+    'bmi', 'bodyFat', 'skeletalMuscle', 'visceralFat', 'bodyWater', 'metabolicAge', 'protein',
+    'muscleMass', 'fatFreeMass', 'subcutaneousFat', 'boneMass', 'bmr', 'symptoms', 'water',
+    'produce', 'diet', 'coldFood', 'breakfastFreq', 'breakfastProtein', 'bedtime', 'waking13',
+    'supplements', 'supplementFreq', 'notes', 'analysis', 'specVersion']);
+  const label = (k) => k.replace(/([A-Z])/g, ' $1').replace(/^./, c => c.toUpperCase()).trim();
+  const extra = Object.keys(form)
+    .filter(k => !KNOWN.has(k) && form[k] !== null && form[k] !== undefined && form[k] !== '')
+    .map(k => `${label(k)}: ${typeof form[k] === 'object' ? JSON.stringify(form[k]) : form[k]}`);
+  if (extra.length) {
+    lines.push('');
+    lines.push('--- Other intake answers ---');
+    lines.push(...extra);
+  }
+
   return lines.join('\n');
 }
 
