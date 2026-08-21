@@ -173,10 +173,10 @@ async function getIndexJSON() {
 // ─── ANTHROPIC API CALL ──────────────────────────────────────────────────────
 
 function callClaude(formText, SYSTEM) {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+  const apiKey = (process.env.ANTHROPIC_API_KEY || '').trim();
   const payload = JSON.stringify({
     model: 'claude-haiku-4-5-20251001',
-    max_tokens: 4096,
+    max_tokens: 8192,
     system: SYSTEM,
     messages: [{ role: 'user', content: `Analyze this health assessment and return JSON:\n\n${formText}` }]
   });
@@ -199,7 +199,13 @@ function callClaude(formText, SYSTEM) {
       res.on('end', () => {
         try {
           const parsed = JSON.parse(data);
-          if (parsed.error) return reject(new Error(parsed.error.message));
+          if (parsed.error) {
+            const m = parsed.error.message || 'Anthropic error';
+            const auth = /invalid|authentication/i.test(m);
+            return reject(new Error(auth
+              ? `${m} (key present: ${apiKey ? 'yes' : 'no'}, length: ${apiKey.length}, prefix: ${apiKey.slice(0, 7)})`
+              : m));
+          }
           resolve(parsed.content[0].text);
         } catch (e) {
           reject(new Error('Failed to parse Claude response'));
