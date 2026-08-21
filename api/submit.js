@@ -26,26 +26,72 @@ function getJSON(url) {
   });
 }
 
-// Build the product menu from the live catalogue. Every product the site sells is
-// eligible; the model picks from all of them, not from a frozen shortlist.
+// Build the product menu from the live catalogue.
+//
+// details.json is the product universe: it is keyed by the exact product id the
+// calculator URL uses, which is why it drives the menu. data/products.json is a
+// Notion-derived view whose products live in categories[].rows[], and it carries the
+// PV and price cells, so it is used only to enrich. Reading `products` off the top of
+// that file yields nothing, which would silently hand the model an empty catalogue.
 async function buildCatalogue() {
-  const [prod, details, protocol] = await Promise.all([
-    getJSON(SITE + '/data/products.json'),
-    getJSON(SITE + '/details.json').catch(() => ({})),
+  const [details, prod, protocol] = await Promise.all([
+    getJSON(SITE + '/details.json'),
+    getJSON(SITE + '/data/products.json').catch(() => ({})),
     getJSON(SITE + '/protocol.json').catch(() => ({}))
   ]);
-  const items = (prod.products || []).filter(p => p.cat === 'nutrition' || (p.areas || []).length);
-  const lines = items.map(p => {
-    const d = details[p.id] || {};
-    const who = (d.who || '').replace(/\s+/g, ' ').slice(0, 180);
-    const adv = (d.advantage || p.tagline || '').replace(/\s+/g, ' ').slice(0, 180);
-    return `- ${p.id} | ${p.name} | areas: ${(p.areas || []).join(',') || 'general'}`
-      + ` | $${p.iboPrice || '?'} IBO / $${p.retailPrice || '?'} retail | ${p.pv || 0} PV`
-      + ` | ${p.daysSupply || '?'} days | ${adv}${who ? ' | best for: ' + who : ''}`;
+
+  // Prices live in the Notion table under display names carrying emoji and brand
+  // prefixes ("🍒 Nutrilite Vitamin C Extended Release"), while ids are slugs. Match on
+  // token overlap after dropping brand words, which recovers the priced core of the line.
+  const STOP = new Set(['nutrilite','artistry','amway','the','and','with','glister',
+                        'satinique','g','h','xs','legacy','of','clean']);
+  const toks = (str) => new Set(String(str).toLowerCase().replace(/[^a-z0-9 ]/g, ' ')
+    .split(/\s+/).filter(t => t && !STOP.has(t) && !/^\d+$/.test(t)));
+
+  const rows = [];
+  for (const cat of (prod.categories || [])) {
+    const cols = cat.columns || [];
+    for (const row of (cat.rows || [])) {
+      const cells = row.cells || [];
+      const pick = (want) => {
+        const i = cols.findIndex(c => c.toLowerCase().includes(want));
+        return (i >= 0 && i < cells.length) ? String(cells[i] || '').trim() : '';
+      };
+      rows.push({ t: toks(row.name), pv: pick('pv'), ibo: pick('ibo'), retail: pick('retail') });
+    }
+  }
+
+  const priceFor = (id) => {
+    const pt = toks(id.replace(/-/g, ' '));
+    let best = null, bs = 0;
+    for (const r of rows) {
+      if (!r.t.size) continue;
+      let hit = 0;
+      for (const t of r.t) if (pt.has(t)) hit++;
+      const sc = hit / r.t.size;
+      if (sc > bs) { bs = sc; best = r; }
+    }
+    return bs >= 0.6 ? best : null;
+  };
+
+  const titleize = (id) => id.split('-')
+    .map(w => w ? w[0].toUpperCase() + w.slice(1) : w).join(' ');
+  const ids = Object.keys(details);
+  const lines = ids.map(id => {
+    const d = details[id] || {};
+    const name = titleize(id);
+    const money = priceFor(id) || {};
+    const adv = (d.advantage || '').replace(/\s+/g, ' ').slice(0, 190);
+    const who = (d.who || '').replace(/\s+/g, ' ').slice(0, 150);
+    const cost = [money.pv && money.pv + ' PV', money.ibo && money.ibo + ' IBO',
+                  money.retail && money.retail + ' retail'].filter(Boolean).join(' / ');
+    return `- ${id} | ${name}${cost ? ' | ' + cost : ''} | ${adv}${who ? ' | best for: ' + who : ''}`;
   });
-  const stages = (protocol.stages || []).map(s =>
-    `${s.glyph}. ${s.zh} ${s.label} — ${s.sub}`).join('\n');
-  return { menu: lines.join('\n'), count: items.length, stages,
+
+  const stages = (protocol.stages || []).map(st =>
+    `${st.zh} ${st.label} (${st.labelEnLong || ''}) — ${st.sub || ''}`).join('\n');
+
+  return { menu: lines.join('\n'), count: ids.length, stages,
            areas: protocol.areas ? Object.keys(protocol.areas).join(', ') : '' };
 }
 
