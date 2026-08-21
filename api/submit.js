@@ -81,8 +81,8 @@ async function buildCatalogue() {
     const d = details[id] || {};
     const name = titleize(id);
     const money = priceFor(id) || {};
-    const adv = (d.advantage || '').replace(/\s+/g, ' ').slice(0, 190);
-    const who = (d.who || '').replace(/\s+/g, ' ').slice(0, 150);
+    const adv = (d.advantage || '').replace(/\s+/g, ' ').slice(0, 105);
+    const who = (d.who || '').replace(/\s+/g, ' ').slice(0, 70);
     const cost = [money.pv && money.pv + ' PV', money.ibo && money.ibo + ' IBO',
                   money.retail && money.retail + ' retail'].filter(Boolean).join(' / ');
     return `- ${id} | ${name}${cost ? ' | ' + cost : ''} | ${adv}${who ? ' | best for: ' + who : ''}`;
@@ -177,7 +177,10 @@ function callClaude(formText, SYSTEM) {
   const payload = JSON.stringify({
     model: 'claude-haiku-4-5-20251001',
     max_tokens: 8192,
-    system: SYSTEM,
+    // The spec and the 175-product catalogue are byte-identical across requests, so mark
+    // them cacheable. Without this the prefill is paid on every submission and the
+    // function runs close to the 60s ceiling.
+    system: [{ type: 'text', text: SYSTEM, cache_control: { type: 'ephemeral' } }],
     messages: [{ role: 'user', content: `Analyze this health assessment and return JSON:\n\n${formText}` }]
   });
 
