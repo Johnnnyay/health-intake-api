@@ -36,7 +36,10 @@ module.exports = async (req, res) => {
       return res.status(200).send(Buffer.from(meta.data.content, 'base64'));
     }
 
-    const html = await getFile(`reports/${rid}.html`);
+    const lang = String(req.query.lang || '').toLowerCase() === 'zh' ? 'zh' : 'en';
+    const html = (lang === 'zh')
+      ? (await getFile(`reports/${rid}.zh.html`)) || (await getFile(`reports/${rid}.html`))
+      : await getFile(`reports/${rid}.html`);
     if (!html) {
       return res.status(404).send(page('Report not found', 'The report file is missing. Please let Johnny know.'));
     }
