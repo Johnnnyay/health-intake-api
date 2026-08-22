@@ -291,7 +291,7 @@ function buildHTML(r, form, filename, assessmentDate, lang) {
 
   const compGridHTML = compRows.length > 0 ? `
   <div class="card">
-    <div class="card-title">Body Composition</div>
+    <div class="card-title">${T.bodyComp}</div>
     <div class="comp-grid">
       ${compRows.map(c => `<div class="comp-row">
         <div class="comp-label">${c.label}</div>
