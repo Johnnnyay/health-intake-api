@@ -4,6 +4,10 @@ const { buildHTML } = require('../lib/render');
 const I18N = require('../lib/i18n');
 const { generateAnalysis } = require('../lib/generate');
 
+/* Stay under the function's maxDuration in vercel.json so the timeout is ours, not
+   the platform's. Ours returns a page that retries; the platform's returns a 504. */
+const GEN_BUDGET_MS = Number(process.env.GEN_BUDGET_MS || 260000);
+
 /* Translation runs here rather than at submit time so the analysis and the
    translation each get their own function-time budget. It is locale-generic:
    nothing below names a language, so adding one is a lib/i18n.js change only. */
@@ -138,16 +142,25 @@ module.exports = async (req, res) => {
          the next one simply tries again, which is recoverable in a way that a failed
          form submission is not. */
       if (!doc.analysis) {
+        /* Race the platform, do not trust it. A thrown error lands in the catch below,
+           but a function killed at its duration ceiling runs no catch at all and the
+           reader gets a raw 504 gateway page. Return the waiting page a little before
+           that, so the failure mode is always a page that refreshes itself. */
+        const budget = new Promise(r => setTimeout(() => r(null), GEN_BUDGET_MS));
+        let produced = null;
         try {
-          doc.analysis = await generateAnalysis(doc.form || {});
-          await pushFile(`reports/${rid}.analysis.json`, JSON.stringify(doc, null, 1),
-            `Generate analysis: ${rid}`);
+          produced = await Promise.race([generateAnalysis(doc.form || {}), budget]);
         } catch (e) {
           console.error('deferred generation failed:', e && e.message);
-          return res.status(200).send(page('Your report is being prepared',
-            'This takes up to a minute the first time. This page will refresh itself.',
-            '<meta http-equiv="refresh" content="12">'));
         }
+        if (!produced) {
+          return res.status(200).send(page('Your report is being prepared',
+            'This takes a minute or two the first time. This page will refresh itself.',
+            '<meta http-equiv="refresh" content="15">'));
+        }
+        doc.analysis = produced;
+        await pushFile(`reports/${rid}.analysis.json`, JSON.stringify(doc, null, 1),
+          `Generate analysis: ${rid}`);
       }
 
       /* A locale is offered only when it will render completely. A page that is
