@@ -130,22 +130,26 @@ module.exports = async (req, res) => {
     const lang = String(req.query.lang || '').toLowerCase() === 'zh' ? 'zh' : 'en';
     let html;
     if (lang === 'zh') {
-      /* Whether a Chinese page is real is a property of the analysis, not of the HTML.
-         The chrome is Chinese either way, so sniffing the page for CJK says nothing. */
+      /* Cache the translation, not the rendered page. Rendering is free, so building it
+         fresh each time means a renderer fix reaches every existing report immediately
+         instead of being masked by stale cached HTML. */
       const stored = await getFile(`reports/${rid}.analysis.json`);
       if (stored) {
         const doc = JSON.parse(stored);
-        const needsWork = doc.analysis && (!doc.analysis.summaryZh
-          || !(doc.analysis.rcaSections || []).every(x => x.textZh)
-          || !(doc.analysis.signals || []).every(x => x.descriptionZh));
+        const a = doc.analysis || {};
+        const needsWork = !a.summaryZh
+          || !(a.rcaSections || []).every(x => x.textZh)
+          || !(a.signals || []).every(x => x.descriptionZh)
+          || !(a.stages || []).every(x => x.focusZh)
+          || !(a.products || []).every(x => x.rationaleZh)
+          || !(a.winsZh && a.winsZh.length === (a.wins || []).length);
         if (needsWork) {
-          const { out: zhAnalysis } = await translateAnalysis(doc.analysis);
-          html = buildHTML(zhAnalysis, doc.form, doc.filename, doc.assessmentDate, 'zh');
-          await pushFile(`reports/${rid}.zh.html`, html, `Chinese version: ${rid}`);
-          await pushFile(`reports/${rid}.analysis.json`,
-            JSON.stringify({ ...doc, analysis: zhAnalysis }, null, 1),
-            `Cache Chinese fields: ${rid}`);
+          const { out } = await translateAnalysis(a);
+          doc.analysis = out;
+          await pushFile(`reports/${rid}.analysis.json`, JSON.stringify(doc, null, 1),
+            `Translate: ${rid}`);
         }
+        html = buildHTML(doc.analysis, doc.form, doc.filename, doc.assessmentDate, 'zh');
       }
       if (!html) html = await getFile(`reports/${rid}.zh.html`);
       if (!html) html = await getFile(`reports/${rid}.html`);
