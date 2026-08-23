@@ -341,23 +341,26 @@ module.exports = async function handler(req, res) {
     //  b) form + analysis      -> the caller already applied report-spec.md and passes the result.
     //                             Used to regenerate reports in batch when the spec changes.
     //                             Needs no Anthropic key at all.
+    /* Generation is deferred to first view of the report. A rich report does not fit
+       inside the 60s function ceiling for a realistic questionnaire, and a client
+       watching the form fail is the worst place to spend that budget. Storing the
+       intake here is fast and never times out; the report page generates on demand
+       and can resume. A caller that supplies its own analysis (batch regeneration)
+       still goes straight through. */
     let rawJson;
     if (form.analysis && typeof form.analysis === 'object') {
       rawJson = JSON.stringify(form.analysis);
     } else {
-      const cat = await buildCatalogue();
-      const spec = await fetchSpec();
-      const SYSTEM = spec
-        + `\n\n---\n\nCATALOGUE (${cat.count} products — recommend from ANY of these):\n${cat.menu}`
-        + (cat.stages ? `\n\n清调补养 stage definitions from the live site:\n${cat.stages}` : '');
-      rawJson = await callClaude(formText, SYSTEM);
+      rawJson = null;   // marker: nothing generated yet
     }
 
     // Parse JSON (handle code fences if present)
-    let reportData;
+    let reportData = null;
     try {
-      const clean = rawJson.replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim();
-      reportData = JSON.parse(clean);
+      if (rawJson !== null) {
+        const clean = rawJson.replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim();
+        reportData = JSON.parse(clean);
+      }
     } catch (e) {
       throw new Error('Claude returned invalid JSON: ' + rawJson.slice(0, 200));
     }
@@ -366,8 +369,10 @@ module.exports = async function handler(req, res) {
     // from the stored analysis plus a translation overlay, so there is no second HTML
     // file per language to keep in sync -- that duplication is what previously let a
     // renderer fix land in one language and not the other.
-    const html = buildHTML(reportData, form, filename, assessmentDate, CANONICAL, [CANONICAL]);
-    await pushPrivate(repoPath, html, `Add health report: ${form.name} (${assessmentDate})`);
+    if (reportData) {
+      const html = buildHTML(reportData, form, filename, assessmentDate, CANONICAL, [CANONICAL]);
+      await pushPrivate(repoPath, html, `Add health report: ${form.name} (${assessmentDate})`);
+    }
 
     // The analysis is the source of truth for every language. `i18n` starts empty and
     // each locale is filled in the first time someone asks for it.
@@ -397,9 +402,10 @@ module.exports = async function handler(req, res) {
         date: assessmentDate,
         rid,
         file: filename,
-        signals: reportData.signals.map(s => s.name),
-        products: reportData.products.map(p => p.name),
-        tier: reportData.tier || null,
+        signals: reportData ? reportData.signals.map(s => s.name) : [],
+        products: reportData ? reportData.products.map(p => p.name) : [],
+        tier: reportData ? (reportData.tier || null) : null,
+        pending: !reportData,
         specVersion: form.specVersion || null,
         generatedBy: form.analysis ? 'batch' : 'api',
         consultant: 'Johnny/Irene'

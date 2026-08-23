@@ -2,6 +2,7 @@ const https = require('https');
 const { getFile, pushFile, ghRequest, getIndex, cors } = require('../lib/github');
 const { buildHTML } = require('../lib/render');
 const I18N = require('../lib/i18n');
+const { generateAnalysis } = require('../lib/generate');
 
 /* Translation runs here rather than at submit time so the analysis and the
    translation each get their own function-time budget. It is locale-generic:
@@ -132,6 +133,23 @@ module.exports = async (req, res) => {
       const doc = JSON.parse(stored);
       doc.i18n = doc.i18n || {};
 
+      /* Generation is deferred at submit time because a rich report does not fit the
+         60s ceiling. Produce it here, on first view, and save it. If this request dies
+         the next one simply tries again, which is recoverable in a way that a failed
+         form submission is not. */
+      if (!doc.analysis) {
+        try {
+          doc.analysis = await generateAnalysis(doc.form || {});
+          await pushFile(`reports/${rid}.analysis.json`, JSON.stringify(doc, null, 1),
+            `Generate analysis: ${rid}`);
+        } catch (e) {
+          console.error('deferred generation failed:', e && e.message);
+          return res.status(200).send(page('Your report is being prepared',
+            'This takes up to a minute the first time. This page will refresh itself.',
+            '<meta http-equiv="refresh" content="12">'));
+        }
+      }
+
       /* A locale is offered only when it will render completely. A page that is
          half translated is worse than one that is not translated at all, so the
          toggle never points at something that would come back mixed. */
@@ -175,8 +193,9 @@ module.exports = async (req, res) => {
   }
 };
 
-function page(title, body) {
+function page(title, body, head) {
   return `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+${head || ''}
 <title>${title}</title>
 <style>
 body{margin:0;min-height:100vh;display:grid;place-items:center;background:#F4F6F9;color:#141922;
