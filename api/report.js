@@ -37,16 +37,30 @@ function callClaude(payloadObj) {
 }
 
 /* Collect every piece of prose, translate in one pass, write it back as *Zh fields. */
-async function translateAnalysis(a) {
+async function translateAnalysis(a, budgetMs) {
+  const started = Date.now();
   const items = [];
-  const push = (path, text) => { if (text && String(text).trim()) items.push({ path, text }); };
-  TRANSLATABLE.forEach(k => push(k, a[k]));
-  (a.signals || []).forEach((s, i) => { push(`signals.${i}.name`, s.name); push(`signals.${i}.badge`, s.badge); push(`signals.${i}.description`, s.description); });
-  (a.rcaSections || []).forEach((s, i) => { push(`rcaSections.${i}.label`, s.label); push(`rcaSections.${i}.text`, s.text); });
-  (a.stages || []).forEach((s, i) => { push(`stages.${i}.focus`, s.focus); push(`stages.${i}.horizon`, s.horizon);
-    (s.items || []).forEach((it, k) => push(`stages.${i}.items.${k}`, it)); });
-  (a.products || []).forEach((pr, i) => { push(`products.${i}.rationale`, pr.rationale); push(`products.${i}.note`, pr.note); });
-  (a.wins || []).forEach((w, i) => push(`wins.${i}`, w));
+  const has = (obj, field) => obj && obj[field + 'Zh'] && String(obj[field + 'Zh']).trim();
+  const push = (path, text, obj, field) => {
+    if (!text || !String(text).trim()) return;
+    if (obj && field && has(obj, field)) return;   // already translated on an earlier pass
+    items.push({ path, text });
+  };
+  TRANSLATABLE.forEach(k => push(k, a[k], a, k));
+  (a.signals || []).forEach((x, i) => { push(`signals.${i}.name`, x.name, x, 'name'); push(`signals.${i}.badge`, x.badge, x, 'badge'); push(`signals.${i}.description`, x.description, x, 'description'); });
+  (a.rcaSections || []).forEach((x, i) => { push(`rcaSections.${i}.label`, x.label, x, 'label'); push(`rcaSections.${i}.text`, x.text, x, 'text'); });
+  (a.stages || []).forEach((x, i) => { push(`stages.${i}.focus`, x.focus, x, 'focus'); push(`stages.${i}.horizon`, x.horizon, x, 'horizon');
+    if (!(x.itemsZh && x.itemsZh.length === (x.items || []).length)) (x.items || []).forEach((it, k) => push(`stages.${i}.items.${k}`, it)); });
+  (a.products || []).forEach((pr, i) => { push(`products.${i}.rationale`, pr.rationale, pr, 'rationale'); push(`products.${i}.note`, pr.note, pr, 'note'); });
+  if (!(a.winsZh && a.winsZh.length === (a.wins || []).length)) (a.wins || []).forEach((w, i) => push(`wins.${i}`, w));
+
+  if (!items.length) return { out: a, done: true };
+
+  /* One pass translates as much as fits. Whatever is left is picked up on the next
+     request, because each pass skips fields that already carry a Zh value. Chunk size
+     is deliberately conservative so a pass finishes well inside the function ceiling. */
+  const CHUNK = 18;
+  const slice = items.slice(0, CHUNK);
 
   const SYS = 'You translate a personalised health report from English into Simplified Chinese for a client in a wellness consulting practice.\n\n'
     + 'Rules:\n'
@@ -58,7 +72,7 @@ async function translateAnalysis(a) {
     + '- Return ONLY a JSON object mapping each id to its Chinese string. No markdown, no commentary.';
 
   const user = 'Translate each value into Simplified Chinese. Return JSON keyed by the same ids.\n\n'
-    + JSON.stringify(Object.fromEntries(items.map((it, i) => [String(i), it.text])), null, 1);
+    + JSON.stringify(Object.fromEntries(slice.map((it, i) => [String(i), it.text])), null, 1);
 
   const raw = await callClaude({
     model: 'claude-haiku-4-5-20251001', max_tokens: 8192,
@@ -68,7 +82,7 @@ async function translateAnalysis(a) {
   const map = JSON.parse(raw.replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim());
 
   const out = JSON.parse(JSON.stringify(a));
-  items.forEach((it, i) => {
+  slice.forEach((it, i) => {
     const zh = map[String(i)];
     if (!zh) return;
     const parts = it.path.split('.');
@@ -79,7 +93,7 @@ async function translateAnalysis(a) {
     if (field === 'items') { (arr[idx].itemsZh = arr[idx].itemsZh || [])[+parts[3]] = zh; }
     else { arr[idx][field + 'Zh'] = zh; }
   });
-  return out;
+  return { out, done: items.length <= CHUNK, remaining: Math.max(0, items.length - CHUNK) };
 }
 
 module.exports = async (req, res) => {
@@ -121,8 +135,11 @@ module.exports = async (req, res) => {
       const stored = await getFile(`reports/${rid}.analysis.json`);
       if (stored) {
         const doc = JSON.parse(stored);
-        if (doc.analysis && !doc.analysis.summaryZh) {
-          const zhAnalysis = await translateAnalysis(doc.analysis);
+        const needsWork = doc.analysis && (!doc.analysis.summaryZh
+          || !(doc.analysis.rcaSections || []).every(x => x.textZh)
+          || !(doc.analysis.signals || []).every(x => x.descriptionZh));
+        if (needsWork) {
+          const { out: zhAnalysis } = await translateAnalysis(doc.analysis);
           html = buildHTML(zhAnalysis, doc.form, doc.filename, doc.assessmentDate, 'zh');
           await pushFile(`reports/${rid}.zh.html`, html, `Chinese version: ${rid}`);
           await pushFile(`reports/${rid}.analysis.json`,
