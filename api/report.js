@@ -1,16 +1,11 @@
-// GET /api/report?r=<rid>
-// Serves one report from the private repo. The rid is a 24-char random token that
-// only exists in the link emailed to the client, so reports are not enumerable and
-// are never public files.
-
 const https = require('https');
 const { getFile, pushFile, ghRequest, getIndex, cors } = require('../lib/github');
 const { buildHTML } = require('../lib/render');
+const I18N = require('../lib/i18n');
 
-/* Translate the report's prose into Chinese, once, then cache the rendered page.
-   Doing it here rather than at submit time keeps generation under the 60s function
-   ceiling: the analysis and the translation each get their own request budget. */
-const TRANSLATABLE = ['tierNote', 'summary', 'bodyCompNote', 'optionA', 'optionB', 'recheckItems'];
+/* Translation runs here rather than at submit time so the analysis and the
+   translation each get their own function-time budget. It is locale-generic:
+   nothing below names a language, so adding one is a lib/i18n.js change only. */
 
 function callClaude(payloadObj) {
   const apiKey = (process.env.ANTHROPIC_API_KEY || '').trim();
@@ -36,64 +31,44 @@ function callClaude(payloadObj) {
   });
 }
 
-/* Collect every piece of prose, translate in one pass, write it back as *Zh fields. */
-async function translateAnalysis(a, budgetMs) {
-  const started = Date.now();
-  const items = [];
-  const has = (obj, field) => obj && obj[field + 'Zh'] && String(obj[field + 'Zh']).trim();
-  const push = (path, text, obj, field) => {
-    if (!text || !String(text).trim()) return;
-    if (obj && field && has(obj, field)) return;   // already translated on an earlier pass
-    items.push({ path, text });
-  };
-  TRANSLATABLE.forEach(k => push(k, a[k], a, k));
-  (a.signals || []).forEach((x, i) => { push(`signals.${i}.name`, x.name, x, 'name'); push(`signals.${i}.badge`, x.badge, x, 'badge'); push(`signals.${i}.description`, x.description, x, 'description'); });
-  (a.rcaSections || []).forEach((x, i) => { push(`rcaSections.${i}.label`, x.label, x, 'label'); push(`rcaSections.${i}.text`, x.text, x, 'text'); });
-  (a.stages || []).forEach((x, i) => { push(`stages.${i}.focus`, x.focus, x, 'focus'); push(`stages.${i}.horizon`, x.horizon, x, 'horizon');
-    if (!(x.itemsZh && x.itemsZh.length === (x.items || []).length)) (x.items || []).forEach((it, k) => push(`stages.${i}.items.${k}`, it)); });
-  (a.products || []).forEach((pr, i) => { push(`products.${i}.rationale`, pr.rationale, pr, 'rationale'); push(`products.${i}.note`, pr.note, pr, 'note'); });
-  if (!(a.winsZh && a.winsZh.length === (a.wins || []).length)) (a.wins || []).forEach((w, i) => push(`wins.${i}`, w));
-
-  if (!items.length) return { out: a, done: true };
-
-  /* One pass translates as much as fits. Whatever is left is picked up on the next
-     request, because each pass skips fields that already carry a Zh value. Chunk size
-     is deliberately conservative so a pass finishes well inside the function ceiling. */
-  const CHUNK = 18;
-  const slice = items.slice(0, CHUNK);
-
-  const SYS = 'You translate a personalised health report from English into Simplified Chinese for a client in a wellness consulting practice.\n\n'
-    + 'Rules:\n'
-    + '- Translate meaning, not word for word. It must read as though written in Chinese.\n'
-    + '- Keep the clinical register: direct, warm, specific. No marketing language.\n'
-    + '- Use the established terms where they apply: 清 调 补 养, 肝经当令 for the 1-3 AM liver window, 心包经当令 for the 19:30-20:40 evening window, 胃经当令 for the 7-9 AM morning window, 亚健康, 隐性饥饿.\n'
-    + '- Keep every number, measurement, product name and English brand name exactly as written.\n'
-    + '- Never add a claim, a promise, or a timeframe that is not in the source.\n'
-    + '- Return ONLY a JSON object mapping each id to its Chinese string. No markdown, no commentary.';
-
-  const user = 'Translate each value into Simplified Chinese. Return JSON keyed by the same ids.\n\n'
-    + JSON.stringify(Object.fromEntries(slice.map((it, i) => [String(i), it.text])), null, 1);
-
+/* Translate one batch of leaves into `locale` and write them into the overlay. */
+async function translateBatch(items, locale, overlay) {
+  const user = 'Translate each value. Return JSON keyed by the same ids.\n\n'
+    + JSON.stringify(Object.fromEntries(items.map((it, i) => [String(i), it.text])), null, 1);
   const raw = await callClaude({
-    model: 'claude-haiku-4-5-20251001', max_tokens: 8192,
-    system: [{ type: 'text', text: SYS, cache_control: { type: 'ephemeral' } }],
+    model: 'claude-haiku-4-5-20251001', max_tokens: 16384,
+    system: [{ type: 'text', text: I18N.systemPrompt(locale), cache_control: { type: 'ephemeral' } }],
     messages: [{ role: 'user', content: user }]
   });
   const map = JSON.parse(raw.replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim());
-
-  const out = JSON.parse(JSON.stringify(a));
-  slice.forEach((it, i) => {
-    const zh = map[String(i)];
-    if (!zh) return;
-    const parts = it.path.split('.');
-    if (parts.length === 1) { out[parts[0] + 'Zh'] = zh; return; }
-    if (parts[0] === 'wins') { (out.winsZh = out.winsZh || [])[+parts[1]] = zh; return; }
-    const arr = out[parts[0]], idx = +parts[1], field = parts[2];
-    if (!arr || !arr[idx]) return;
-    if (field === 'items') { (arr[idx].itemsZh = arr[idx].itemsZh || [])[+parts[3]] = zh; }
-    else { arr[idx][field + 'Zh'] = zh; }
+  items.forEach((it, i) => {
+    const v = map[String(i)];
+    if (v && String(v).trim()) I18N.setPath(overlay, it.path, String(v));
   });
-  return { out, done: items.length <= CHUNK, remaining: Math.max(0, items.length - CHUNK) };
+  return overlay;
+}
+
+/* Fill in as much of `locale` as fits in the time budget, saving after each batch so
+   progress survives a timeout. Returns whether the locale is now complete. */
+async function fillLocale(doc, rid, locale, budgetMs) {
+  const started = Date.now();
+  doc.i18n = doc.i18n || {};
+  const overlay = doc.i18n[locale] = doc.i18n[locale] || {};
+  const BATCH = 24;
+  let wrote = false;
+  while (true) {
+    const todo = I18N.missing(doc.analysis, overlay);
+    if (!todo.length) break;
+    if (Date.now() - started > budgetMs) break;
+    await translateBatch(todo.slice(0, BATCH), locale, overlay);
+    wrote = true;
+    if (Date.now() - started > budgetMs) break;
+  }
+  if (wrote) {
+    await pushFile(`reports/${rid}.analysis.json`, JSON.stringify(doc, null, 1),
+      `Translate ${locale}: ${rid}`);
+  }
+  return I18N.isComplete(doc.analysis, overlay);
 }
 
 module.exports = async (req, res) => {
@@ -127,43 +102,44 @@ module.exports = async (req, res) => {
       return res.status(200).send(Buffer.from(meta.data.content, 'base64'));
     }
 
-    const lang = String(req.query.lang || '').toLowerCase() === 'zh' ? 'zh' : 'en';
+    const asked = String(req.query.lang || '').toLowerCase();
+    const locale = I18N.LOCALES.includes(asked) ? asked : I18N.CANONICAL;
+
+    /* Render fresh from the stored analysis every time. Rendering is free, so a
+       renderer fix reaches every existing report instead of being masked by cached
+       HTML, and both languages are guaranteed to come from the same source. */
+    const stored = await getFile(`reports/${rid}.analysis.json`);
     let html;
-    if (lang === 'zh') {
-      /* Cache the translation, not the rendered page. Rendering is free, so building it
-         fresh each time means a renderer fix reaches every existing report immediately
-         instead of being masked by stale cached HTML. */
-      const stored = await getFile(`reports/${rid}.analysis.json`);
-      if (stored) {
-        const doc = JSON.parse(stored);
-        const a = doc.analysis || {};
-        const needsWork = !a.summaryZh
-          || !(a.rcaSections || []).every(x => x.textZh)
-          || !(a.signals || []).every(x => x.descriptionZh)
-          || !(a.stages || []).every(x => x.focusZh)
-          || !(a.products || []).every(x => x.rationaleZh)
-          || !(a.winsZh && a.winsZh.length === (a.wins || []).length);
-        if (needsWork) {
-          const { out } = await translateAnalysis(a);
-          doc.analysis = out;
-          await pushFile(`reports/${rid}.analysis.json`, JSON.stringify(doc, null, 1),
-            `Translate: ${rid}`);
-        }
-        html = buildHTML(doc.analysis, doc.form, doc.filename, doc.assessmentDate, 'zh');
+
+    if (stored) {
+      const doc = JSON.parse(stored);
+      doc.i18n = doc.i18n || {};
+
+      /* A locale is offered only when it will render completely. A page that is
+         half translated is worse than one that is not translated at all, so the
+         toggle never points at something that would come back mixed. */
+      const ready = (l) => l === I18N.CANONICAL || I18N.isComplete(doc.analysis, doc.i18n[l]);
+
+      let shown = locale;
+      if (locale !== I18N.CANONICAL && !ready(locale)) {
+        /* First request for this language: fill it in. Budget leaves room to render
+           and respond inside the function ceiling. */
+        const done = await fillLocale(doc, rid, locale, 38000).catch(e => {
+          console.error('translation failed:', e && e.message); return false;
+        });
+        if (!done) shown = I18N.CANONICAL;   // still incomplete: canonical, never a mixture
       }
-      if (!html) html = await getFile(`reports/${rid}.zh.html`);
-      if (!html) html = await getFile(`reports/${rid}.html`);
-    } else {
-      /* Same reasoning as the Chinese path above: render fresh from the stored analysis
-         so a renderer fix reaches every existing report. Fall back to the stored HTML
-         only for older reports that predate analysis storage. */
-      const stored = await getFile(`reports/${rid}.analysis.json`);
-      if (stored) {
-        const doc = JSON.parse(stored);
-        html = buildHTML(doc.analysis, doc.form, doc.filename, doc.assessmentDate, 'en');
-      }
-      if (!html) html = await getFile(`reports/${rid}.html`);
+
+      const available = I18N.LOCALES.filter(ready);
+      const resolved = I18N.resolve(doc.analysis, shown === I18N.CANONICAL ? null : doc.i18n[shown]);
+      html = buildHTML(resolved, doc.form, doc.filename, doc.assessmentDate, shown, available);
     }
+
+    /* Reports generated before analyses were stored can only be served as written.
+       No locale list is passed, so they show no language toggle rather than one that
+       leads to a broken page. */
+    if (!html) html = await getFile(`reports/${rid}.html`);
+
     if (!html) {
       return res.status(404).send(page('Report not found', 'The report file is missing. Please let Johnny know.'));
     }

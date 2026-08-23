@@ -5,6 +5,7 @@ const https = require('https');
 const crypto = require('crypto');
 const { pushFile: pushPrivate, getIndex: getPrivateIndex, getFile: getPrivateFile, cors } = require('../lib/github');
 const { buildHTML } = require('../lib/render');
+const { CANONICAL } = require('../lib/i18n');
 
 // ─── CONFIG ────────────────────────────────────────────────────────────────
 
@@ -361,19 +362,18 @@ module.exports = async function handler(req, res) {
       throw new Error('Claude returned invalid JSON: ' + rawJson.slice(0, 200));
     }
 
-    // Build both language versions. English carries no Chinese characters at all;
-    // Chinese uses the *Zh fields where the analysis supplies them.
-    const html   = buildHTML(reportData, form, filename, assessmentDate, 'en');
-    const htmlZh = buildHTML(reportData, form, filename, assessmentDate, 'zh');
-
+    // Write the canonical (English) page only. Other locales are rendered on demand
+    // from the stored analysis plus a translation overlay, so there is no second HTML
+    // file per language to keep in sync -- that duplication is what previously let a
+    // renderer fix land in one language and not the other.
+    const html = buildHTML(reportData, form, filename, assessmentDate, CANONICAL, [CANONICAL]);
     await pushPrivate(repoPath, html, `Add health report: ${form.name} (${assessmentDate})`);
-    await pushPrivate(`reports/${rid}.zh.html`, htmlZh, `Add health report (zh): ${form.name}`);
 
-    // Keep the analysis so the report can be re-rendered later, in particular so the
-    // Chinese version can be produced on demand without regenerating the analysis.
+    // The analysis is the source of truth for every language. `i18n` starts empty and
+    // each locale is filled in the first time someone asks for it.
     const { analysis: _a, ...formOnly } = form;
     await pushPrivate(`reports/${rid}.analysis.json`,
-      JSON.stringify({ rid, assessmentDate, filename, analysis: reportData, form: formOnly }, null, 1),
+      JSON.stringify({ rid, assessmentDate, filename, analysis: reportData, form: formOnly, i18n: {} }, null, 1),
       `Store analysis for ${form.name}`);
 
     // Persist the raw intake next to the report. This is what makes a report reproducible:
