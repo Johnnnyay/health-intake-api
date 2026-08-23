@@ -130,7 +130,10 @@ module.exports = async (req, res) => {
         if (!done) shown = I18N.CANONICAL;   // still incomplete: canonical, never a mixture
       }
 
-      const available = I18N.LOCALES.filter(ready);
+      /* The menu offers every language, matching the product site. A locale that is not
+         yet filled is translated on first request; `shown` below still guarantees the page
+         served is never a mixture. */
+      const available = I18N.LOCALES;
       const resolved = I18N.resolve(doc.analysis, shown === I18N.CANONICAL ? null : doc.i18n[shown]);
       html = buildHTML(resolved, doc.form, doc.filename, doc.assessmentDate, shown, available);
     }
