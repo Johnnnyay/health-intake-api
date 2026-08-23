@@ -1,6 +1,11 @@
-// POST /api/lookup  { initials, dob }
+// POST /api/lookup  { email, dob }
 // Powers my-report.html. Returns only the matching client's own reports, and only
-// when both initials and date of birth are correct. Never returns the full index.
+// when both email and date of birth are correct. Never returns the full index.
+//
+// Was initials + date of birth, which collided: three clients share AH and two
+// share JH. Initials also asked people to reconstruct something the form never
+// requested, since plenty give only a first name. Email is what they actually
+// typed into the form, and it is unique.
 
 const { getIndex, cors } = require('../lib/github');
 
@@ -25,21 +30,25 @@ module.exports = async (req, res) => {
     return res.status(429).json({ error: 'Too many attempts. Wait a minute and try again.' });
   }
 
-  const initials = String((req.body && req.body.initials) || '').trim().toUpperCase();
+  const email = String((req.body && req.body.email) || '').trim().toLowerCase();
   const dob = String((req.body && req.body.dob) || '').trim();
 
-  if (!/^[A-Z]{2,4}$/.test(initials) || !/^\d{4}-\d{2}-\d{2}$/.test(dob)) {
-    return res.status(400).json({ error: 'Enter your initials and date of birth.' });
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) || !/^\d{4}-\d{2}-\d{2}$/.test(dob)) {
+    return res.status(400).json({ error: 'Enter the email address you used on the form, and your date of birth.' });
   }
 
   try {
     const index = await getIndex();
-    const client = (index.clients || {})[`${initials}_${dob}`];
+    /* The index is still keyed by initials and date of birth, so match on the stored
+       email instead of the key. Date of birth must also match, so an email alone is
+       not enough to retrieve anyone's report. */
+    const client = Object.values(index.clients || {}).find(c =>
+      String(c.email || '').trim().toLowerCase() === email && String(c.dob || '') === dob);
 
     // Same response shape and timing for "wrong details" as for "no reports yet",
     // so this cannot be used to probe which clients exist.
     if (!client) {
-      return res.status(404).json({ error: 'No report found for those details. Double-check your initials and date of birth, or contact your consultant.' });
+      return res.status(404).json({ error: 'No report found for those details. Double-check the email you used on the form and your date of birth, or contact your consultant.' });
     }
 
     return res.status(200).json({

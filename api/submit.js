@@ -397,6 +397,9 @@ module.exports = async function handler(req, res) {
     const newEntry = {
       name: form.name,
       initials,
+      /* Stored so my-report.html can look people up by the address they actually
+         typed. Initials collide: three clients share AH. */
+      email: String(form.email || '').trim().toLowerCase() || null,
       dob: form.dob,
       reports: [{
         date: assessmentDate,
