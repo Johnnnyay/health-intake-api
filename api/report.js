@@ -116,22 +116,21 @@ module.exports = async (req, res) => {
     const lang = String(req.query.lang || '').toLowerCase() === 'zh' ? 'zh' : 'en';
     let html;
     if (lang === 'zh') {
-      html = await getFile(`reports/${rid}.zh.html`);
-      /* A cached Chinese page whose body never got translated is not good enough.
-         Detect it and rebuild once, then cache. */
-      const untranslated = html && !/[\u4e00-\u9fff]{12,}/.test(html.replace(/<[^>]+>/g, ' '));
-      if (!html || untranslated) {
-        const stored = await getFile(`reports/${rid}.analysis.json`);
-        if (stored) {
-          const { analysis, form, assessmentDate, filename } = JSON.parse(stored);
-          const zhAnalysis = await translateAnalysis(analysis);
-          html = buildHTML(zhAnalysis, form, filename, assessmentDate, 'zh');
+      /* Whether a Chinese page is real is a property of the analysis, not of the HTML.
+         The chrome is Chinese either way, so sniffing the page for CJK says nothing. */
+      const stored = await getFile(`reports/${rid}.analysis.json`);
+      if (stored) {
+        const doc = JSON.parse(stored);
+        if (doc.analysis && !doc.analysis.summaryZh) {
+          const zhAnalysis = await translateAnalysis(doc.analysis);
+          html = buildHTML(zhAnalysis, doc.form, doc.filename, doc.assessmentDate, 'zh');
           await pushFile(`reports/${rid}.zh.html`, html, `Chinese version: ${rid}`);
           await pushFile(`reports/${rid}.analysis.json`,
-            JSON.stringify({ rid, assessmentDate, filename, analysis: zhAnalysis, form }, null, 1),
+            JSON.stringify({ ...doc, analysis: zhAnalysis }, null, 1),
             `Cache Chinese fields: ${rid}`);
         }
       }
+      if (!html) html = await getFile(`reports/${rid}.zh.html`);
       if (!html) html = await getFile(`reports/${rid}.html`);
     } else {
       html = await getFile(`reports/${rid}.html`);
