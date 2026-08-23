@@ -54,17 +54,18 @@ async function fillLocale(doc, rid, locale, budgetMs) {
   const started = Date.now();
   doc.i18n = doc.i18n || {};
   const overlay = doc.i18n[locale] = doc.i18n[locale] || {};
-  const BATCH = 24;
-  let wrote = false;
-  while (true) {
+
+  /* Save after EVERY batch, not at the end. If a batch overruns the function ceiling the
+     request dies with it, and anything held in memory is lost -- which meant a report whose
+     first batch was too slow could never make progress no matter how many times it was
+     retried. Writing each batch turns a timeout into "resumes next request". */
+  const BATCH = Number(process.env.TRANSLATE_BATCH || 10);
+  let done = false;
+  while (!done) {
     const todo = I18N.missing(doc.analysis, overlay);
-    if (!todo.length) break;
+    if (!todo.length) { done = true; break; }
     if (Date.now() - started > budgetMs) break;
     await translateBatch(todo.slice(0, BATCH), locale, overlay);
-    wrote = true;
-    if (Date.now() - started > budgetMs) break;
-  }
-  if (wrote) {
     await pushFile(`reports/${rid}.analysis.json`, JSON.stringify(doc, null, 1),
       `Translate ${locale}: ${rid}`);
   }
@@ -140,7 +141,7 @@ module.exports = async (req, res) => {
       if (locale !== I18N.CANONICAL && !ready(locale)) {
         /* First request for this language: fill it in. Budget leaves room to render
            and respond inside the function ceiling. */
-        const done = await fillLocale(doc, rid, locale, 38000).catch(e => {
+        const done = await fillLocale(doc, rid, locale, 30000).catch(e => {
           console.error('translation failed:', e && e.message); return false;
         });
         if (!done) shown = I18N.CANONICAL;   // still incomplete: canonical, never a mixture
