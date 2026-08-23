@@ -154,7 +154,15 @@ module.exports = async (req, res) => {
       if (!html) html = await getFile(`reports/${rid}.zh.html`);
       if (!html) html = await getFile(`reports/${rid}.html`);
     } else {
-      html = await getFile(`reports/${rid}.html`);
+      /* Same reasoning as the Chinese path above: render fresh from the stored analysis
+         so a renderer fix reaches every existing report. Fall back to the stored HTML
+         only for older reports that predate analysis storage. */
+      const stored = await getFile(`reports/${rid}.analysis.json`);
+      if (stored) {
+        const doc = JSON.parse(stored);
+        html = buildHTML(doc.analysis, doc.form, doc.filename, doc.assessmentDate, 'en');
+      }
+      if (!html) html = await getFile(`reports/${rid}.html`);
     }
     if (!html) {
       return res.status(404).send(page('Report not found', 'The report file is missing. Please let Johnny know.'));
