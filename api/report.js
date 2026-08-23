@@ -60,7 +60,7 @@ async function fillLocale(doc, rid, locale, budgetMs) {
      request dies with it, and anything held in memory is lost -- which meant a report whose
      first batch was too slow could never make progress no matter how many times it was
      retried. Writing each batch turns a timeout into "resumes next request". */
-  const BATCH = Number(process.env.TRANSLATE_BATCH || 10);
+  const BATCH = Number(process.env.TRANSLATE_BATCH || 16);
   let done = false;
   while (!done) {
     const todo = I18N.missing(doc.analysis, overlay);
@@ -157,12 +157,20 @@ module.exports = async (req, res) => {
 
       let shown = locale;
       if (locale !== I18N.CANONICAL && !ready(locale)) {
-        /* First request for this language: fill it in. Budget leaves room to render
-           and respond inside the function ceiling. */
-        const done = await fillLocale(doc, rid, locale, 30000).catch(e => {
+        /* First request for this language: fill it in. */
+        const done = await fillLocale(doc, rid, locale, 42000).catch(e => {
           console.error('translation failed:', e && e.message); return false;
         });
-        if (!done) shown = I18N.CANONICAL;   // still incomplete: canonical, never a mixture
+        if (!done) {
+          /* Do NOT quietly serve English here. Falling back looked exactly like the
+             language button being broken: four clicks, nine seconds each, still
+             English. Say what is happening and refresh, the way generation does. */
+          return res.status(200).send(page(
+            'Preparing this language',
+            'The first time a report is opened in a new language it has to be translated. '
+            + 'This takes up to a minute, once. This page will refresh itself.',
+            '<meta http-equiv="refresh" content="8">'));
+        }
       }
 
       /* The menu offers every language, matching the product site. A locale that is not
