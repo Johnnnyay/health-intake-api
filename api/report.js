@@ -83,10 +83,26 @@ module.exports = async (req, res) => {
 
   try {
     const index = await getIndex();
-    const known = Object.values(index.clients || {})
-      .some(c => (c.reports || []).some(r => r.rid === rid));
-    if (!known) {
+    const owner = Object.values(index.clients || {})
+      .find(c => (c.reports || []).some(r => r.rid === rid));
+    if (!owner) {
       return res.status(404).send(page('Report not found', 'This link has expired or was never valid. Ask Johnny or Irene to resend it.'));
+    }
+
+    /* A link, once sent, is out of our hands: it sits in somebody's inbox and gets
+       opened months later. So a superseded rid resolves to the client's current
+       report rather than serving whatever was written that day. Without this, every
+       regeneration silently orphans every link already sent, and the person opening
+       it sees an old report with no sign that a newer one exists.
+       `&exact=1` opts out, for showing someone a previous assessment on purpose. */
+    const current = (owner.reports || [])[0];
+    const exact = String(req.query.exact || '') === '1';
+    if (!exact && current && current.rid !== rid) {
+      const q = new URLSearchParams({ r: current.rid });
+      if (req.query.lang) q.set('lang', String(req.query.lang));
+      if (req.query.f) q.set('f', String(req.query.f));
+      res.setHeader('Cache-Control', 'private, no-store, max-age=0');
+      return res.redirect(302, `/api/report?${q.toString()}`);
     }
 
     // ?f=pdf serves the PDF version when one exists.
