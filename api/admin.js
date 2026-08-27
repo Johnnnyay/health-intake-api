@@ -31,6 +31,14 @@ module.exports = async (req, res) => {
     return res.status(200).json(index);
   } catch (err) {
     console.error('admin index failed:', err);
+    /* Say which failure this is. "0 clients" and "we cannot reach the store" look
+       identical on the page otherwise, and the first one is a lie. */
+    if (err && err.storeUnreachable) {
+      return res.status(502).json({
+        error: 'Cannot reach the report store. This is usually an expired GITHUB_TOKEN on the server, not missing data. Your reports are safe.',
+        detail: err.message
+      });
+    }
     return res.status(500).json({ error: 'Could not load the index.' });
   }
 };
