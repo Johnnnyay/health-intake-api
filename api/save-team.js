@@ -30,11 +30,21 @@ module.exports = async (req, res) => {
     return res.status(401).json({ error: 'Wrong edit key.' });
   }
 
+  const obj = (v) => (typeof v === 'object' && v !== null && !Array.isArray(v));
+
   const body = req.body;
-  if (!body || typeof body.people !== 'object' || body.people === null || Array.isArray(body.people)) {
+  if (!body || !obj(body.people)) {
     return res.status(400).json({ error: 'Expected { people: {...} }.' });
   }
+  // Candidates carry what Johnny knows about a person rather than what a calendar knows:
+  // whether they are still in process, their background, and the yellow flags. Same file
+  // and same write, because it is the same act of annotating the team.
+  if (body.candidates !== undefined && !obj(body.candidates)) {
+    return res.status(400).json({ error: 'candidates must be an object.' });
+  }
+  const candidates = body.candidates || {};
   const count = Object.keys(body.people).length;
+  const cCount = Object.keys(candidates).length;
 
   try {
     const head = await ghRequest('GET', PATH, null, HUB_REPO);
@@ -43,25 +53,25 @@ module.exports = async (req, res) => {
     // An empty payload over an existing file is almost always a browser that lost its
     // localStorage, not a deliberate wipe. Refuse it. Deleting every note is then a
     // deliberate act against the repo rather than something a cleared cache can do.
-    if (count === 0 && head.status === 200) {
+    if (count === 0 && cCount === 0 && head.status === 200) {
       let prev = 0;
       try {
         const j = JSON.parse(Buffer.from(head.data.content, 'base64').toString('utf8'));
-        prev = Object.keys(j.people || {}).length;
+        prev = Object.keys(j.people || {}).length + Object.keys(j.candidates || {}).length;
       } catch (e) {}
       if (prev > 0) {
         return res.status(409).json({
-          error: 'Refusing to overwrite ' + prev + ' saved people with an empty set.',
+          error: 'Refusing to overwrite ' + prev + ' saved records with an empty set.',
           saved: prev
         });
       }
     }
 
-    const out = { people: body.people, count,
+    const out = { people: body.people, candidates, count, candidateCount: cCount,
                   savedAt: new Date().toISOString(), savedFrom: 'hub' };
 
     const put = await ghRequest('PUT', PATH, {
-      message: 'Team & Org: notes and goals edited in the hub (' + count + ' people)',
+      message: 'Team & Org: edited in the hub (' + count + ' people, ' + cCount + ' candidates)',
       content: Buffer.from(JSON.stringify(out, null, 1)).toString('base64'),
       branch: 'main',
       ...(sha ? { sha } : {})
@@ -71,7 +81,7 @@ module.exports = async (req, res) => {
       return res.status(502).json({ error: 'GitHub rejected the write', detail: put.data && put.data.message });
     }
     res.setHeader('Cache-Control', 'no-store');
-    return res.status(200).json({ ok: true, count, savedAt: out.savedAt,
+    return res.status(200).json({ ok: true, count, candidateCount: cCount, savedAt: out.savedAt,
                                   commit: put.data.commit && put.data.commit.sha });
   } catch (err) {
     console.error('save-team failed:', err);
