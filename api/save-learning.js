@@ -1,28 +1,19 @@
 // POST /api/save-learning
 // Commits the Learning & Teaching content back into the diamond-hq repo so edits
-// made in the hub outlive the browser they were typed in. Guarded by EDIT_KEY.
+// made in the hub outlive the browser they were typed in. Open to the hub's own origin.
 
-const crypto = require('crypto');
-const { ghRequest, cors } = require('../lib/github');
+const { ghRequest, cors, fromKnownOrigin } = require('../lib/github');
 
 const HUB_REPO = process.env.HUB_REPO || 'Johnnnyay/diamond-hq';
 const PATH = (t) => 'data/learning-' + t + '.json';
-
-function safeEqual(a, b) {
-  const ab = Buffer.from(String(a)), bb = Buffer.from(String(b));
-  if (ab.length !== bb.length) return false;
-  return crypto.timingSafeEqual(ab, bb);
-}
 
 module.exports = async (req, res) => {
   cors(req, res);
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
-  const expected = process.env.EDIT_KEY;
-  if (!expected) return res.status(500).json({ error: 'EDIT_KEY is not configured on the server.' });
-  if (!safeEqual(req.headers['x-edit-key'] || '', expected)) {
-    return res.status(401).json({ error: 'Wrong edit key.' });
+  if (!fromKnownOrigin(req)) {
+    return res.status(403).json({ error: 'This endpoint only accepts writes from the hub.' });
   }
 
   const body = req.body;
