@@ -27,12 +27,13 @@ addressed by a 24-character random token that exists only in the link you send.
 | `GITHUB_TOKEN` | A **fresh** fine-grained PAT with Contents: read/write on `health-reports` only |
 | `ANTHROPIC_API_KEY` | unchanged |
 | `REPORTS_REPO` | `johnnnyay/health-reports` |
-| `ADMIN_KEY` | `pN6nn5HGtDp-HnoP5vy95J2eHvoVt3lr` |
+| `ADMIN_KEY` | A long random string you generate yourself (never committed) |
 | `API_BASE` | `https://health-intake-api.vercel.app` |
 | `INTAKE_SECRET` | optional, unchanged |
 
-The `ADMIN_KEY` above was generated for you. It is your new admin.html passcode.
-Do not commit it anywhere.
+`ADMIN_KEY` is the admin.html passcode. Generate it yourself (`openssl rand -base64 24`),
+set it only in Vercel, and never write it into this repo. An earlier version of this file
+contained a key, so that key is in the git history and must be treated as compromised.
 
 ## Deploy order
 
