@@ -3,11 +3,11 @@ const { getFile, pushFile, ghRequest, getIndex, cors } = require('../lib/github'
 const { buildHTML } = require('../lib/render');
 const I18N = require('../lib/i18n');
 const { generateAnalysis } = require('../lib/generate');
+const ibo = require('../lib/ibo');
 
 /* Stay under the function's maxDuration in vercel.json so the timeout is ours, not
    the platform's. Ours returns a page that retries; the platform's returns a 504. */
 const GEN_BUDGET_MS = Number(process.env.GEN_BUDGET_MS || 260000);
-const LOCK_SINCE = '2026-09-21';
 
 /* Translation runs here rather than at submit time so the analysis and the
    translation each get their own function-time budget. It is locale-generic:
@@ -84,6 +84,8 @@ module.exports = async (req, res) => {
   if (req.method !== 'GET') return res.status(405).send('Method not allowed');
 
   const rid = String(req.query.r || '').trim();
+  const partner = ibo.fromCookie(req);
+  let access = { report: true, products: true };   // reports with no analysis file predate the lock
   if (!/^[a-f0-9]{24}$/.test(rid)) {
     return res.status(400).send(page('Invalid link', 'That link is not in the right format. Check that you copied the whole thing.'));
   }
@@ -114,6 +116,9 @@ module.exports = async (req, res) => {
 
     // ?f=pdf serves the PDF version when one exists.
     if (String(req.query.f || '').toLowerCase() === 'pdf') {
+      const entry = (owner.reports || []).find(r => r.rid === rid);
+      const a = await ibo.getAccess(rid, entry && entry.date);
+      if (!partner && !a.report) return res.status(404).send(page('Report locked', 'Your consultant will unlock this report when you go through it together.'));
       const meta = await ghRequest('GET', `reports/${rid}.pdf`);
       if (meta.status !== 200 || !meta.data.content) {
         return res.status(404).send(page('No PDF for this report', 'This assessment does not have a PDF version. Open the web version instead.'));
@@ -164,6 +169,20 @@ module.exports = async (req, res) => {
           `Generate analysis: ${rid}`);
       }
 
+      /* The report is locked until a partner opens it (lib/ibo.js). Generation above already
+         ran, so it is ready the moment it is unlocked. A locked visitor gets a placeholder page
+         that carries none of the report, so nothing can be read out of its source. */
+      access = await ibo.getAccess(rid, doc.assessmentDate, doc.unlocked);
+      if (!partner && !access.report) {
+        const l = I18N.LOCALES.includes(asked) ? asked : I18N.CANONICAL;
+        res.setHeader('Content-Type', 'text/html; charset=utf-8');
+        res.setHeader('Cache-Control', 'private, no-store, max-age=0');
+        res.setHeader('Vary', 'Cookie');
+        res.setHeader('X-Robots-Tag', 'noindex, nofollow, noarchive');
+        return res.status(200).send(buildHTML({}, { name: doc.form && doc.form.name }, doc.filename,
+          doc.assessmentDate, l, I18N.LOCALES, { gate: true }));
+      }
+
       /* A locale is offered only when it will render completely. A page that is
          half translated is worse than one that is not translated at all, so the
          toggle never points at something that would come back mixed. */
@@ -192,11 +211,8 @@ module.exports = async (req, res) => {
          served is never a mixture. */
       const available = I18N.LOCALES;
       const resolved = I18N.resolve(doc.analysis, shown === I18N.CANONICAL ? null : doc.i18n[shown]);
-      /* Reports made before the lock existed had their button working from day one; only
-         reports from LOCK_SINCE on start locked. An explicit flag always wins. */
-      const unlocked = doc.unlocked === true
-        || (doc.unlocked === undefined && String(doc.assessmentDate || '') < LOCK_SINCE);
-      html = buildHTML(resolved, doc.form, doc.filename, doc.assessmentDate, shown, available, { unlocked });
+      html = buildHTML(resolved, doc.form, doc.filename, doc.assessmentDate, shown, available,
+        { unlocked: access.products, ibo: partner, reportOpen: access.report });
     }
 
     /* Reports generated before analyses were stored can only be served as written.
@@ -210,6 +226,7 @@ module.exports = async (req, res) => {
 
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     res.setHeader('Cache-Control', 'private, no-store, max-age=0');
+    res.setHeader('Vary', 'Cookie');
     res.setHeader('X-Robots-Tag', 'noindex, nofollow, noarchive');
     res.setHeader('Referrer-Policy', 'no-referrer');
     return res.status(200).send(html);
