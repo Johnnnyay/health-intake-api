@@ -81,6 +81,19 @@ async function fillLocale(doc, rid, locale, budgetMs) {
 module.exports = async (req, res) => {
   cors(req, res);
   if (req.method === 'OPTIONS') return res.status(200).end();
+  if (req.method === 'POST') {
+    /* The all-reports page (github.io) opens a report by posting its admin token here. This sets
+       the session cookie for this domain and continues to the report, so a locked report opens
+       in full. The token travels in the body, never in a URL. */
+    const b = typeof req.body === 'string' ? Object.fromEntries(new URLSearchParams(req.body)) : (req.body || {});
+    const r = String(b.r || '').trim();
+    if (!ibo.tokenOk(b.token) || !/^[a-f0-9]{24}$/.test(r)) {
+      return res.status(401).send(page('Sign in as admin', 'Open this report from the All reports page after signing in as admin.'));
+    }
+    ibo.setCookie(res);
+    res.setHeader('Cache-Control', 'private, no-store, max-age=0');
+    return res.redirect(303, `/api/report?r=${r}`);
+  }
   if (req.method !== 'GET') return res.status(405).send('Method not allowed');
 
   const rid = String(req.query.r || '').trim();

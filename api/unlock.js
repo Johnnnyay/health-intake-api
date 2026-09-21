@@ -1,12 +1,12 @@
 const { getFile, cors, fromKnownOrigin } = require('../lib/github');
 const ibo = require('../lib/ibo');
 
-/* Partner sign-in and the two locks on a report. See lib/ibo.js.
+/* Admin sign-in and the two locks on a report. See lib/ibo.js.
 
    GET  ?r=<rid>                       { report }   is this report open yet (a locked page polls this)
-   POST { action: 'login', code }      signs a partner in (sets the session cookie)
+   POST { action: 'login', code }      signs an admin in (sets the session cookie)
    POST { action: 'logout' }           signs out
-   POST { action: 'set', rid, report?, products? }   partner only: open or lock either switch
+   POST { action: 'set', rid, report?, products? }   admin only: open or lock either switch
    The passcode is checked here, on the server, so a report page never carries it. */
 
 module.exports = async (req, res) => {
@@ -35,7 +35,7 @@ module.exports = async (req, res) => {
         return res.status(401).json({ error: 'Incorrect passcode' });
       }
       ibo.setCookie(res);
-      return res.status(200).json({ ok: true });
+      return res.status(200).json({ ok: true, token: ibo.sessionToken() });
     }
 
     if (action === 'logout') {
@@ -44,7 +44,7 @@ module.exports = async (req, res) => {
     }
 
     if (action === 'set') {
-      if (!ibo.fromCookie(req)) return res.status(401).json({ error: 'Sign in as a partner first' });
+      if (!ibo.fromRequest(req)) return res.status(401).json({ error: 'Sign in as admin first' });
       const rid = String(body.rid || '').trim();
       if (!/^[a-f0-9]{24}$/.test(rid)) return res.status(400).json({ error: 'Bad report id' });
       const stored = await getFile(`reports/${rid}.analysis.json`);
