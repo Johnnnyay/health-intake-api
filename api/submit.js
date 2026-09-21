@@ -300,6 +300,18 @@ function formatForm(form) {
 
 // ─── MAIN HANDLER ────────────────────────────────────────────────────────────
 
+/* Fire the first view of a report and disconnect. Waits a moment so the request is on the wire
+   before this function is allowed to finish. */
+function warmReport(url) {
+  return new Promise((resolve) => {
+    try {
+      const r = https.get(url, { headers: { 'User-Agent': 'report-warmup' } }, (resp) => resp.resume());
+      r.on('error', () => resolve());
+      setTimeout(() => { try { r.destroy(); } catch (e) { /* already closed */ } resolve(); }, 2500);
+    } catch (e) { resolve(); }
+  });
+}
+
 module.exports = async function handler(req, res) {
   cors(req, res);
 
@@ -425,6 +437,15 @@ module.exports = async function handler(req, res) {
     await pushPrivate('index.json', JSON.stringify(index, null, 2), `Update index: ${key}`);
 
     const reportUrl = `${REPORT_BASE}${rid}`;
+
+    /* Start writing the report now, so it is ready before anyone opens the link. Generation
+       runs on the first view of the report page and takes about a minute and a half; a viewer
+       who arrives first just waits. Here we make that first view ourselves and hang up. The
+       server keeps generating after the caller disconnects (checked on production), and one
+       generation runs at a time per report (api/report.js), so a real visitor who arrives
+       meanwhile does not start a second. Never allowed to fail or delay the submission. */
+    if (!reportData) await warmReport(reportUrl);
+
     return res.status(200).json({ success: true, reportUrl, key, rid });
 
   } catch (err) {
