@@ -17,6 +17,9 @@
     },
     "api/save-image.js": {
       "maxDuration": 20
+    },
+    "api/unlock.js": {
+      "maxDuration": 15
     }
   }
 }

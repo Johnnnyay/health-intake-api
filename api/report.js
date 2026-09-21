@@ -7,6 +7,7 @@ const { generateAnalysis } = require('../lib/generate');
 /* Stay under the function's maxDuration in vercel.json so the timeout is ours, not
    the platform's. Ours returns a page that retries; the platform's returns a 504. */
 const GEN_BUDGET_MS = Number(process.env.GEN_BUDGET_MS || 260000);
+const LOCK_SINCE = '2026-09-21';
 
 /* Translation runs here rather than at submit time so the analysis and the
    translation each get their own function-time budget. It is locale-generic:
@@ -191,7 +192,11 @@ module.exports = async (req, res) => {
          served is never a mixture. */
       const available = I18N.LOCALES;
       const resolved = I18N.resolve(doc.analysis, shown === I18N.CANONICAL ? null : doc.i18n[shown]);
-      html = buildHTML(resolved, doc.form, doc.filename, doc.assessmentDate, shown, available);
+      /* Reports made before the lock existed had their button working from day one; only
+         reports from LOCK_SINCE on start locked. An explicit flag always wins. */
+      const unlocked = doc.unlocked === true
+        || (doc.unlocked === undefined && String(doc.assessmentDate || '') < LOCK_SINCE);
+      html = buildHTML(resolved, doc.form, doc.filename, doc.assessmentDate, shown, available, { unlocked });
     }
 
     /* Reports generated before analyses were stored can only be served as written.
