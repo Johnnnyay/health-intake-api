@@ -8,6 +8,7 @@ const ibo = require('../lib/ibo');
 /* Stay under the function's maxDuration in vercel.json so the timeout is ours, not
    the platform's. Ours returns a page that retries; the platform's returns a 504. */
 const GEN_BUDGET_MS = Number(process.env.GEN_BUDGET_MS || 260000);
+const MAX_ATTEMPTS = 3;   // then the page stops retrying by itself and an admin decides
 
 /* Translation runs here rather than at submit time so the analysis and the
    translation each get their own function-time budget. It is locale-generic:
@@ -161,25 +162,40 @@ module.exports = async (req, res) => {
          the next one simply tries again, which is recoverable in a way that a failed
          form submission is not. */
       if (!doc.analysis) {
-        /* Race the platform, do not trust it. A thrown error lands in the catch below,
-           but a function killed at its duration ceiling runs no catch at all and the
-           reader gets a raw 504 gateway page. Return the waiting page a little before
-           that, so the failure mode is always a page that refreshes itself. */
+        /* One generation at a time, and a record of every attempt. The waiting page used to
+           refresh every 15 seconds and each refresh started another full generation while the
+           last was still running, and any failure looked exactly like "still preparing". */
+        const genPath = `reports/${rid}.generation.json`;
+        const g = await readGen(genPath);
+        const retry = partner && String(req.query.retry || '') === '1';
+        const running = g.startedAt && !g.finishedAt && Date.now() - g.startedAt < GEN_BUDGET_MS + 20000;
+        if (running) return res.status(200).send(waitingPage(g, partner, rid));
+        if (!retry && g.error && (g.attempts || 0) >= MAX_ATTEMPTS) return res.status(200).send(waitingPage(g, partner, rid));
+
+        const attempts = retry ? 1 : (g.attempts || 0) + 1;
+        const t0 = Date.now();
+        await writeGen(genPath, { startedAt: t0, attempts });
+        /* Race the platform, do not trust it. A thrown error lands in the catch below, but a
+           function killed at its duration ceiling runs no catch at all and the reader gets a raw
+           504 gateway page. Return the waiting page a little before that. */
         const budget = new Promise(r => setTimeout(() => r(null), GEN_BUDGET_MS));
-        let produced = null;
+        let produced = null, err = '';
         try {
           produced = await Promise.race([generateAnalysis(doc.form || {}), budget]);
+          if (!produced) err = `no result after ${Math.round(GEN_BUDGET_MS / 1000)} seconds`;
         } catch (e) {
-          console.error('deferred generation failed:', e && e.message);
+          err = (e && e.message) || String(e);
+          console.error('deferred generation failed:', err);
         }
         if (!produced) {
-          return res.status(200).send(page('Your report is being prepared',
-            'This takes a minute or two the first time. This page will refresh itself.',
-            '<meta http-equiv="refresh" content="15">'));
+          const rec = { startedAt: t0, finishedAt: Date.now(), attempts, error: String(err).slice(0, 700) };
+          await writeGen(genPath, rec);
+          return res.status(200).send(waitingPage(rec, partner, rid));
         }
         doc.analysis = produced;
         await pushFile(`reports/${rid}.analysis.json`, JSON.stringify(doc, null, 1),
           `Generate analysis: ${rid}`);
+        await writeGen(genPath, { startedAt: t0, finishedAt: Date.now(), attempts, ok: true, ms: Date.now() - t0 });
       }
 
       /* The report is locked until a partner opens it (lib/ibo.js). Generation above already
@@ -248,6 +264,34 @@ module.exports = async (req, res) => {
     return res.status(500).send(page('Something went wrong', 'We could not load the report right now. Try again in a minute.'));
   }
 };
+
+const esc = (x) => String(x).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+async function readGen(path) {
+  try { return JSON.parse((await getFile(path)) || '{}'); } catch (e) { return {}; }
+}
+async function writeGen(path, rec) {
+  try { await pushFile(path, JSON.stringify(rec, null, 1), `Generation record ${path.replace(/^reports\//, '').slice(0, 24)}`); } catch (e) { /* a record is a courtesy, never a reason to fail */ }
+}
+
+/* The page a visitor sees while a report is not generated. A client gets a plain message; an
+   admin also gets the real error and a way to retry. */
+function waitingPage(g, admin, rid) {
+  const stuck = g.error && (g.attempts || 0) >= MAX_ATTEMPTS;
+  const detail = admin && (g.error || g.startedAt)
+    ? `<br><br><small style="text-align:left;display:block;word-break:break-word">Attempt ${esc(g.attempts || 1)}`
+      + (g.startedAt && !g.finishedAt ? ` running for ${Math.round((Date.now() - g.startedAt) / 1000)}s` : '')
+      + (g.error ? `. Last error: ${esc(g.error)}` : '') + `</small>`
+      + (stuck ? `<br><a href="/api/report?r=${esc(rid)}&retry=1">Try again</a>` : '')
+    : '';
+  if (stuck) {
+    return page('We could not prepare this report',
+      'Something went wrong while preparing it. Your consultant has been told and will sort it out, so you do not need to do anything.' + detail);
+  }
+  return page('Your report is being prepared',
+    'This takes a minute or two the first time. This page will refresh itself.' + detail,
+    '<meta http-equiv="refresh" content="15">');
+}
 
 function page(title, body, head) {
   return `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
