@@ -161,6 +161,15 @@ module.exports = async (req, res) => {
          60s ceiling. Produce it here, on first view, and save it. If this request dies
          the next one simply tries again, which is recoverable in a way that a failed
          form submission is not. */
+      /* The model sometimes decides an intake has too little to analyze and returns its own
+         { error, missing_fields, ... } object instead of the report schema. That is valid JSON,
+         so it is not caught as a generation failure, but it is not a report either: feeding it to
+         buildHTML produced a page with literal "undefined" text where fields were expected.
+         An admin retry clears it so it re-enters generation below like a fresh report. */
+      if (doc.analysis && doc.analysis.error && partner && String(req.query.retry || '') === '1') {
+        doc.analysis = null;
+      }
+
       if (!doc.analysis) {
         /* One generation at a time, and a record of every attempt. The waiting page used to
            refresh every 15 seconds and each refresh started another full generation while the
@@ -210,6 +219,20 @@ module.exports = async (req, res) => {
         res.setHeader('X-Robots-Tag', 'noindex, nofollow, noarchive');
         return res.status(200).send(buildHTML({}, { name: doc.form && doc.form.name }, doc.filename,
           doc.assessmentDate, l, I18N.LOCALES, { gate: true }));
+      }
+
+      if (doc.analysis && doc.analysis.error) {
+        const missing = Array.isArray(doc.analysis.missing_fields) ? doc.analysis.missing_fields : [];
+        const detail = partner
+          ? `<br><br><small style="text-align:left;display:block">${esc(doc.analysis.message || '')}`
+            + (missing.length ? `<br><br>Missing:<ul style="margin:4px 0 0;padding-left:18px">${missing.map(m => `<li>${esc(m)}</li>`).join('')}</ul>` : '')
+            + `<br><a href="/api/report?r=${esc(rid)}&retry=1">Regenerate now</a></small>`
+          : '';
+        return res.status(200).send(page('Not enough information for a report',
+          (partner
+            ? 'The assessment did not have enough detail to build a report.'
+            : 'Your assessment did not have enough detail to build a report. Please ask your consultant for a new link and answer as many questions as you can.')
+          + detail));
       }
 
       /* A locale is offered only when it will render completely. A page that is
