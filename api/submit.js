@@ -436,6 +436,13 @@ module.exports = async function handler(req, res) {
 
     await pushPrivate('index.json', JSON.stringify(index, null, 2), `Update index: ${key}`);
 
+    /* Every new report starts locked, both the report and the product list, until an admin opens
+       it (lib/ibo.js). Written out here so the default never depends on a date rule, and it holds
+       for reports supplied with their own analysis as well as ones generated later. */
+    await pushPrivate(`reports/${rid}.access.json`,
+      JSON.stringify({ report: false, products: false, updatedAt: new Date().toISOString() }, null, 1),
+      `Access ${rid}: locked on creation`);
+
     const reportUrl = `${REPORT_BASE}${rid}`;
 
     /* Start writing the report now, so it is ready before anyone opens the link. Generation
