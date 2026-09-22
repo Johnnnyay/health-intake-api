@@ -5,6 +5,22 @@ const I18N = require('../lib/i18n');
 const { generateAnalysis } = require('../lib/generate');
 const ibo = require('../lib/ibo');
 
+/* Write a freshly generated report's summary into its row in index.json. Best-effort: the
+   report itself is already stored and correct, this only affects how it looks in All Reports,
+   so a failure here is logged and never allowed to break serving the report. */
+async function backfillIndex(rid, analysis) {
+  const index = await getIndex();
+  for (const client of Object.values(index.clients || {})) {
+    const row = (client.reports || []).find(r => r.rid === rid);
+    if (!row) continue;
+    row.signals = (analysis.signals || []).map(s => s.name).filter(Boolean);
+    row.products = (analysis.products || []).map(p => p.name).filter(Boolean);
+    row.pending = false;
+    await pushFile('index.json', JSON.stringify(index, null, 2), `Update index: report ${rid} ready`);
+    return;
+  }
+}
+
 /* Stay under the function's maxDuration in vercel.json so the timeout is ours, not
    the platform's. Ours returns a page that retries; the platform's returns a 504. */
 const GEN_BUDGET_MS = Number(process.env.GEN_BUDGET_MS || 260000);
@@ -205,6 +221,11 @@ module.exports = async (req, res) => {
         await pushFile(`reports/${rid}.analysis.json`, JSON.stringify(doc, null, 1),
           `Generate analysis: ${rid}`);
         await writeGen(genPath, { startedAt: t0, finishedAt: Date.now(), attempts, ok: true, ms: Date.now() - t0 });
+        /* index.json's per-report row (signals, products, pending) is written once at submit
+           time, before generation has run, and nothing else ever revisits it. Every report
+           made the normal way sat there forever looking unfinished in All Reports even after
+           it was ready. Update it now that there is something real to show. */
+        await backfillIndex(rid, produced).catch(e => console.error('index backfill failed:', e && e.message));
       }
 
       /* The report is locked until a partner opens it (lib/ibo.js). Generation above already
