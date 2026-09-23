@@ -217,6 +217,10 @@ module.exports = async (req, res) => {
           await writeGen(genPath, rec);
           return res.status(200).send(waitingPage(rec, partner, rid));
         }
+        /* Deleted or replaced by an edited resubmission while this was being written: saving now
+           would bring back a file nothing points to. */
+        const still = await getFile(`reports/${rid}.analysis.json`).catch(() => 'unknown');
+        if (!still) return res.status(410).send(page('This report was replaced', 'A newer version of this assessment was submitted. Use the link from that one.'));
         doc.analysis = produced;
         await pushFile(`reports/${rid}.analysis.json`, JSON.stringify(doc, null, 1),
           `Generate analysis: ${rid}`);
