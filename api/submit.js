@@ -3,7 +3,7 @@
 
 const https = require('https');
 const crypto = require('crypto');
-const { pushFile: pushPrivate, getIndex: getPrivateIndex, getFile: getPrivateFile, cors } = require('../lib/github');
+const { pushFile: pushPrivate, getIndex: getPrivateIndex, getFile: getPrivateFile, deleteFile, cors } = require('../lib/github');
 const { buildHTML } = require('../lib/render');
 const { CANONICAL } = require('../lib/i18n');
 
@@ -284,7 +284,7 @@ function formatForm(form) {
     'bmi', 'bodyFat', 'skeletalMuscle', 'visceralFat', 'bodyWater', 'metabolicAge', 'protein',
     'muscleMass', 'fatFreeMass', 'subcutaneousFat', 'boneMass', 'bmr', 'symptoms', 'water',
     'produce', 'diet', 'coldFood', 'breakfastFreq', 'breakfastProtein', 'bedtime', 'waking13',
-    'supplements', 'supplementFreq', 'notes', 'analysis', 'specVersion', 'event']);
+    'supplements', 'supplementFreq', 'notes', 'analysis', 'specVersion', 'event', 'replaces']);
   const label = (k) => k.replace(/([A-Z])/g, ' $1').replace(/^./, c => c.toUpperCase()).trim();
   const extra = Object.keys(form)
     .filter(k => !KNOWN.has(k) && form[k] !== null && form[k] !== undefined && form[k] !== '')
@@ -441,6 +441,25 @@ module.exports = async function handler(req, res) {
       index.clients[key] = newEntry;
     }
 
+    /* An edited resubmission replaces the report it was edited from, so the client keeps one
+       report instead of two. Only with that report's own id (which only its thank-you page knows)
+       and only when the email matches the one it was filed under. */
+    let replacedRid = null;
+    const wantReplace = /^[a-f0-9]{24}$/.test(String(form.replaces || '')) ? String(form.replaces) : null;
+    if (wantReplace && wantReplace !== rid) {
+      const email = String(form.email || '').trim().toLowerCase();
+      for (const [ck, c] of Object.entries(index.clients)) {
+        const at = (c.reports || []).findIndex(r => r.rid === wantReplace);
+        if (at < 0) continue;
+        if (email && String(c.email || '').toLowerCase() === email) {
+          c.reports.splice(at, 1);
+          if (!c.reports.length) delete index.clients[ck];
+          replacedRid = wantReplace;
+        }
+        break;
+      }
+    }
+
     await pushPrivate('index.json', JSON.stringify(index, null, 2), `Update index: ${key}`);
 
     /* Every new report starts locked, both the report and the product list, until an admin opens
@@ -460,7 +479,16 @@ module.exports = async function handler(req, res) {
        meanwhile does not start a second. Never allowed to fail or delay the submission. */
     if (!reportData) await warmReport(reportUrl);
 
-    return res.status(200).json({ success: true, reportUrl, key, rid });
+    /* The replaced report's files go last and best effort: the new report already exists, so a
+       failure here only leaves an orphan file nobody can reach from the index. */
+    if (replacedRid) {
+      for (const p of [`reports/${replacedRid}.analysis.json`, `reports/${replacedRid}.access.json`,
+                       `reports/${replacedRid}.generation.json`, `reports/${replacedRid}.html`, `intake/${replacedRid}.json`]) {
+        try { await deleteFile(p, `Replaced by ${rid}: delete ${p}`); } catch (e) { console.error('replace cleanup', p, e.message); }
+      }
+    }
+
+    return res.status(200).json({ success: true, reportUrl, key, rid, replaced: replacedRid });
 
   } catch (err) {
     console.error('Report generation error:', err);
