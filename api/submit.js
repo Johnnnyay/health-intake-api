@@ -284,7 +284,7 @@ function formatForm(form) {
     'bmi', 'bodyFat', 'skeletalMuscle', 'visceralFat', 'bodyWater', 'metabolicAge', 'protein',
     'muscleMass', 'fatFreeMass', 'subcutaneousFat', 'boneMass', 'bmr', 'symptoms', 'water',
     'produce', 'diet', 'coldFood', 'breakfastFreq', 'breakfastProtein', 'bedtime', 'waking13',
-    'supplements', 'supplementFreq', 'notes', 'analysis', 'specVersion']);
+    'supplements', 'supplementFreq', 'notes', 'analysis', 'specVersion', 'event']);
   const label = (k) => k.replace(/([A-Z])/g, ' $1').replace(/^./, c => c.toUpperCase()).trim();
   const extra = Object.keys(form)
     .filter(k => !KNOWN.has(k) && form[k] !== null && form[k] !== undefined && form[k] !== '')
@@ -405,6 +405,7 @@ module.exports = async function handler(req, res) {
     }, null, 2), `Store intake for ${form.name} (${assessmentDate})`);
 
     // Update the private index
+    const eventTag = /^[a-z0-9-]{3,40}$/.test(String(form.event || '')) ? form.event : null;
     const index = await getPrivateIndex();
     const newEntry = {
       name: form.name,
@@ -423,7 +424,13 @@ module.exports = async function handler(req, res) {
         pending: !reportData,
         specVersion: form.specVersion || null,
         generatedBy: form.analysis ? 'batch' : 'api',
-        consultant: 'Johnny/Irene'
+        consultant: 'Johnny/Irene',
+        submittedAt: new Date().toISOString(),
+        // Lets an event page (api/event.js) list its own guests before the report is written.
+        ...(eventTag ? { event: eventTag } : {}),
+        priorities: (Array.isArray(form.priorities) ? form.priorities : [])
+          .map(p => p && p.id === 'other' ? { id: 'other', other: String(p.other || '').slice(0, 120) } : { id: String((p && p.id) || '') })
+          .filter(p => p.id)
       }]
     };
 

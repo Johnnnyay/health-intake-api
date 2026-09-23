@@ -20,6 +20,9 @@
     },
     "api/unlock.js": {
       "maxDuration": 15
+    },
+    "api/event.js": {
+      "maxDuration": 20
     }
   }
 }
