@@ -18,7 +18,7 @@ const ID_RE = /^[a-z0-9]{6,14}-[a-f0-9]{6}$/;
 
 const FIELDS = {
   name: 120, email: 160, routine: 1500, concerns: null, concernOther: 200,
-  hasAllergy: 5, allergies: 500, type: 60,
+  hasAllergy: 5, allergies: 500, type: 60, chemical: 40,
 };
 
 function clean(answers) {
