@@ -4,6 +4,7 @@ const { buildHTML } = require('../lib/render');
 const I18N = require('../lib/i18n');
 const { generateAnalysis } = require('../lib/generate');
 const ibo = require('../lib/ibo');
+const { extractJson } = require('../lib/extract');
 
 /* Write a freshly generated report's summary into its row in index.json. Best-effort: the
    report itself is already stored and correct, this only affects how it looks in All Reports,
@@ -54,8 +55,15 @@ function callClaude(payloadObj) {
   });
 }
 
-/* Translate one batch of leaves into `locale` and write them into the overlay. */
-async function translateBatch(items, locale, overlay) {
+/* Translate one batch of leaves into `locale` and write them into the overlay.
+
+   A reply that cannot be read, or that skips some ids, used to throw the whole batch away, and the
+   next request asked for the same batch and failed the same way: the report sat on "Preparing this
+   language" forever. Now the leaves that did not come back are retried in halves, and a single leaf
+   that still will not translate keeps its English text (noted in `log`), so a language always
+   finishes. A failed call to the model itself (network, outage) still throws: that is transient, and
+   filling English in for it would make the gap permanent. */
+async function translateBatch(items, locale, overlay, log) {
   const user = 'Translate each value. Return JSON keyed by the same ids.\n\n'
     + JSON.stringify(Object.fromEntries(items.map((it, i) => [String(i), it.text])), null, 1);
   const raw = await callClaude({
@@ -63,11 +71,23 @@ async function translateBatch(items, locale, overlay) {
     system: [{ type: 'text', text: I18N.systemPrompt(locale), cache_control: { type: 'ephemeral' } }],
     messages: [{ role: 'user', content: user }]
   });
-  const map = JSON.parse(raw.replace(/^```json\s*/i, '').replace(/```\s*$/, '').trim());
+  let map = null, err = '';
+  try { map = extractJson(raw); } catch (e) { err = e.message; }
+  const missed = [];
   items.forEach((it, i) => {
-    const v = map[String(i)];
+    const v = map && map[String(i)];
     if (v && String(v).trim()) I18N.setPath(overlay, it.path, String(v));
+    else missed.push(it);
   });
+  if (!missed.length) return overlay;
+  if (missed.length > 1) {
+    const half = Math.ceil(missed.length / 2);
+    await translateBatch(missed.slice(0, half), locale, overlay, log);
+    await translateBatch(missed.slice(half), locale, overlay, log);
+    return overlay;
+  }
+  I18N.setPath(overlay, missed[0].path, missed[0].text);
+  log.push({ path: missed[0].path, error: err || 'no translation came back' });
   return overlay;
 }
 
@@ -83,16 +103,47 @@ async function fillLocale(doc, rid, locale, budgetMs) {
      first batch was too slow could never make progress no matter how many times it was
      retried. Writing each batch turns a timeout into "resumes next request". */
   const BATCH = Number(process.env.TRANSLATE_BATCH || 16);
+  const log = [];
   let done = false;
   while (!done) {
     const todo = I18N.missing(doc.analysis, overlay);
     if (!todo.length) { done = true; break; }
     if (Date.now() - started > budgetMs) break;
-    await translateBatch(todo.slice(0, BATCH), locale, overlay);
+    await translateBatch(todo.slice(0, BATCH), locale, overlay, log);
+    if (log.length) {
+      doc.i18nLog = doc.i18nLog || {};
+      doc.i18nLog[locale] = { at: new Date().toISOString(), keptEnglish: (doc.i18nLog[locale] ? doc.i18nLog[locale].keptEnglish || [] : []).concat(log.splice(0)) };
+    }
     await pushFile(`reports/${rid}.analysis.json`, JSON.stringify(doc, null, 1),
       `Translate ${locale}: ${rid}`);
   }
   return I18N.isComplete(doc.analysis, overlay);
+}
+
+/* One translation at a time per report. The "preparing" page refreshes every few seconds, and
+   each refresh used to start its own translation of the same leaves while the last was running. */
+async function translationRunning(rid) {
+  const t = await readGen(`reports/${rid}.translate.json`);
+  return !!(t.startedAt && !t.finishedAt && Date.now() - t.startedAt < 200000);
+}
+async function translateWithLock(doc, rid, locale, budgetMs) {
+  const path = `reports/${rid}.translate.json`;
+  await writeGen(path, { locale, startedAt: Date.now() });
+  try { return await fillLocale(doc, rid, locale, budgetMs); }
+  finally { await writeGen(path, { locale, startedAt: 0, finishedAt: Date.now() }); }
+}
+
+/* Start a report's Chinese version in the background right after it is written, so switching
+   language is instant for whoever opens it next. Fire and hang up: the server keeps working. */
+function warmTranslation(rid, locale) {
+  return new Promise((resolve) => {
+    try {
+      const base = process.env.API_BASE || 'https://health-intake-api.vercel.app';
+      const r = https.get(`${base}/api/report?r=${rid}&prep=${locale}`, { headers: { 'User-Agent': 'translation-warmup' } }, (resp) => resp.resume());
+      r.on('error', () => resolve());
+      setTimeout(() => { try { r.destroy(); } catch (e) { /* closed */ } resolve(); }, 2500);
+    } catch (e) { resolve(); }
+  });
 }
 
 module.exports = async (req, res) => {
@@ -173,6 +224,23 @@ module.exports = async (req, res) => {
       const doc = JSON.parse(stored);
       doc.i18n = doc.i18n || {};
 
+      /* ?prep=zh makes a language ready without showing the report: used in the background right
+         after a report is written, and to repair one whose translation stalled. It answers with
+         counts only, never content, so it is safe on a locked report. */
+      const prep = String(req.query.prep || '').toLowerCase();
+      if (prep) {
+        res.setHeader('Cache-Control', 'private, no-store, max-age=0');
+        if (!I18N.LOCALES.includes(prep) || prep === I18N.CANONICAL) return res.status(400).json({ error: 'Unknown language' });
+        if (!doc.analysis || doc.analysis.error) return res.status(200).json({ rid, locale: prep, ready: false, reason: 'report not written yet' });
+        if (I18N.isComplete(doc.analysis, doc.i18n[prep])) return res.status(200).json({ rid, locale: prep, ready: true });
+        if (await translationRunning(rid)) return res.status(200).json({ rid, locale: prep, ready: false, reason: 'already translating' });
+        const ok = await translateWithLock(doc, rid, prep, 170000)
+          .catch((e) => { console.error('prep translation failed:', e && e.message); return false; });
+        return res.status(200).json({ rid, locale: prep, ready: !!ok,
+          missing: I18N.missing(doc.analysis, doc.i18n[prep]).length,
+          keptEnglish: ((doc.i18nLog || {})[prep] || {}).keptEnglish ? doc.i18nLog[prep].keptEnglish.length : 0 });
+      }
+
       /* Generation is deferred at submit time because a rich report does not fit the
          60s ceiling. Produce it here, on first view, and save it. If this request dies
          the next one simply tries again, which is recoverable in a way that a failed
@@ -230,6 +298,7 @@ module.exports = async (req, res) => {
            made the normal way sat there forever looking unfinished in All Reports even after
            it was ready. Update it now that there is something real to show. */
         await backfillIndex(rid, produced).catch(e => console.error('index backfill failed:', e && e.message));
+        await warmTranslation(rid, 'zh');
       }
 
       /* The report is locked until a partner opens it (lib/ibo.js). Generation above already
@@ -268,7 +337,7 @@ module.exports = async (req, res) => {
       let shown = locale;
       if (locale !== I18N.CANONICAL && !ready(locale)) {
         /* First request for this language: fill it in. */
-        const done = await fillLocale(doc, rid, locale, 42000).catch(e => {
+        const done = (await translationRunning(rid)) ? false : await translateWithLock(doc, rid, locale, 42000).catch(e => {
           console.error('translation failed:', e && e.message); return false;
         });
         if (!done) {
