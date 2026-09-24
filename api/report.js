@@ -41,6 +41,7 @@ function callClaude(payloadObj) {
                  'content-type': 'application/json', 'content-length': Buffer.byteLength(payload) }
     }, (res) => {
       let d = '';
+      res.setEncoding('utf8');   // decode across chunks, or a Chinese character split between two arrives as U+FFFD
       res.on('data', c => d += c);
       res.on('end', () => {
         try {
@@ -244,6 +245,13 @@ module.exports = async (req, res) => {
         res.setHeader('Cache-Control', 'private, no-store, max-age=0');
         if (!I18N.LOCALES.includes(prep) || prep === I18N.CANONICAL) return res.status(400).json({ error: 'Unknown language' });
         if (!doc.analysis || doc.analysis.error) return res.status(200).json({ rid, locale: prep, ready: false, reason: 'report not written yet' });
+        /* An explicit prep also gives lines that fell back to English another try: blank them
+           so they count as missing, and start a fresh log. */
+        const kept = ((doc.i18nLog || {})[prep] || {}).keptEnglish || [];
+        if (kept.length && doc.i18n[prep] && !(await translationRunning(rid))) {
+          kept.forEach(k => I18N.setPath(doc.i18n[prep], k.path, ''));
+          delete doc.i18nLog[prep];
+        }
         if (I18N.isComplete(doc.analysis, doc.i18n[prep])) return res.status(200).json({ rid, locale: prep, ready: true });
         if (await translationRunning(rid)) return res.status(200).json({ rid, locale: prep, ready: false, reason: 'already translating' });
         const ok = await translateWithLock(doc, rid, prep, 170000)

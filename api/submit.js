@@ -22,6 +22,7 @@ function getJSON(url) {
   return new Promise((resolve, reject) => {
     https.get(url, (res) => {
       let d = '';
+      res.setEncoding('utf8');
       res.on('data', c => d += c);
       res.on('end', () => { try { resolve(JSON.parse(d)); } catch (e) { reject(e); } });
     }).on('error', reject);
@@ -138,6 +139,7 @@ function githubRequest(method, path, body) {
     };
     const req = https.request(options, (res) => {
       let data = '';
+      res.setEncoding('utf8');
       res.on('data', chunk => data += chunk);
       res.on('end', () => {
         try { resolve({ status: res.statusCode, data: JSON.parse(data) }); }
@@ -200,6 +202,7 @@ function callClaude(formText, SYSTEM) {
     };
     const req = https.request(options, (res) => {
       let data = '';
+      res.setEncoding('utf8');
       res.on('data', chunk => data += chunk);
       res.on('end', () => {
         try {
