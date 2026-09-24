@@ -86,6 +86,18 @@ async function translateBatch(items, locale, overlay, log) {
     await translateBatch(missed.slice(half), locale, overlay, log);
     return overlay;
   }
+  /* One leaf left. The usual cause is a straight quote inside the translated text that breaks
+     the JSON, so ask for this one as plain text, where there is nothing to escape. */
+  const plain = await callClaude({
+    model: 'claude-haiku-4-5-20251001', max_tokens: 4096,
+    system: [{ type: 'text', text: I18N.systemPrompt(locale), cache_control: { type: 'ephemeral' } }],
+    messages: [{ role: 'user', content: 'Translate this one value. Reply with the translation only, no quotes around it, no JSON, no notes.\n\n' + missed[0].text }]
+  }).catch(() => '');
+  let text = String(plain || '').trim();
+  if (text.startsWith('{')) {   // the system prompt asks for JSON, so it may still answer that way
+    try { const o = extractJson(text); text = String(Object.values(o)[0] || '').trim(); } catch (e) { text = ''; }
+  }
+  if (text) { I18N.setPath(overlay, missed[0].path, text); return overlay; }
   I18N.setPath(overlay, missed[0].path, missed[0].text);
   log.push({ path: missed[0].path, error: err || 'no translation came back' });
   return overlay;
