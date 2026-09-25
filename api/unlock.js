@@ -70,6 +70,7 @@ module.exports = async (req, res) => {
          piece still cleans up the rest instead of failing whole. */
       const paths = [
         `reports/${rid}.analysis.json`, `reports/${rid}.access.json`, `reports/${rid}.generation.json`,
+        `reports/${rid}.translate.json`,
         `reports/${rid}.html`, `reports/${rid}.zh.html`, `reports/${rid}.pdf`, `intake/${rid}.json`,
       ];
       const removed = [];
