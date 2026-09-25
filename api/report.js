@@ -74,10 +74,12 @@ async function translateBatch(items, locale, overlay, log) {
   });
   let map = null, err = '';
   try { map = extractJson(raw); } catch (e) { err = e.message; }
+  /* A Spanish or Hindi line that came back with Chinese in it is not a translation. */
+  const usable = (v, it) => v && String(v).trim() && !(locale !== 'zh' && I18N.hasCjk(v) && !I18N.hasCjk(it.text));
   const missed = [];
   items.forEach((it, i) => {
     const v = map && map[String(i)];
-    if (v && String(v).trim()) I18N.setPath(overlay, it.path, String(v));
+    if (usable(v, it)) I18N.setPath(overlay, it.path, String(v));
     else missed.push(it);
   });
   if (!missed.length) return overlay;
@@ -98,7 +100,7 @@ async function translateBatch(items, locale, overlay, log) {
   if (text.startsWith('{')) {   // the system prompt asks for JSON, so it may still answer that way
     try { const o = extractJson(text); text = String(Object.values(o)[0] || '').trim(); } catch (e) { text = ''; }
   }
-  if (text) { I18N.setPath(overlay, missed[0].path, text); return overlay; }
+  if (usable(text, missed[0])) { I18N.setPath(overlay, missed[0].path, text); return overlay; }
   I18N.setPath(overlay, missed[0].path, missed[0].text);
   log.push({ path: missed[0].path, error: err || 'no translation came back' });
   return overlay;
@@ -119,7 +121,7 @@ async function fillLocale(doc, rid, locale, budgetMs) {
   const log = [];
   let done = false;
   while (!done) {
-    const todo = I18N.missing(doc.analysis, overlay);
+    const todo = I18N.missing(doc.analysis, overlay, locale);
     if (!todo.length) { done = true; break; }
     if (Date.now() - started > budgetMs) break;
     await translateBatch(todo.slice(0, BATCH), locale, overlay, log);
@@ -130,7 +132,44 @@ async function fillLocale(doc, rid, locale, budgetMs) {
     await pushFile(`reports/${rid}.analysis.json`, JSON.stringify(doc, null, 1),
       `Translate ${locale}: ${rid}`);
   }
-  return I18N.isComplete(doc.analysis, overlay);
+  return I18N.isComplete(doc.analysis, overlay, locale);
+}
+
+/* The English analysis is the source every language is translated from, and the spec forbids
+   Chinese in it, but the model has still written lines like "Fibre + probiotic is the 清肠毒
+   pair". Rewrite any prose leaf that carries Chinese into plain English before it is saved.
+   Returns how many leaves were rewritten; anything still carrying Chinese is left for the next
+   pass rather than mangled. */
+const SCRUB_PROMPT = 'You edit a health report written in English for clients who do not read Chinese. '
+  + 'Each value below contains Chinese characters or Chinese punctuation. Rewrite each value so it is '
+  + 'entirely English: replace every Chinese term with its meaning in plain English, as part of the '
+  + 'sentence, and replace Chinese punctuation with English punctuation. Change nothing else: keep the '
+  + 'wording, numbers, product names and every [[MARKER]] in double square brackets exactly as they are. '
+  + 'Useful meanings: 清/调/补/养 = the Clear/Regulate/Replenish/Sustain stage; 清肠毒 = clearing the gut; '
+  + '清血毒 = clearing the blood; 护肝计划 or 护肝方案 = the evening liver routine; 黄金 6+1 营养早餐 = the 6+1 '
+  + 'nutrition breakfast; 肝经当令 = the liver\'s window, roughly 1 to 3 AM; 心包经当令 = the evening window, '
+  + 'roughly 19:30 to 20:40; 胃经当令 = the morning window, roughly 7 to 9 AM; 子午流注 = the body\'s daily clock. '
+  + 'Never put a straight double quote inside a value. Return ONLY a JSON object mapping each id to its '
+  + 'rewritten string.';
+async function scrubCanonical(a) {
+  const leaves = I18N.cjkLeaves(a);
+  if (!leaves.length) return 0;
+  let fixed = 0;
+  for (let s = 0; s < leaves.length; s += 16) {
+    const batch = leaves.slice(s, s + 16);
+    const raw = await callClaude({
+      model: 'claude-haiku-4-5-20251001', max_tokens: 16384,
+      system: [{ type: 'text', text: SCRUB_PROMPT, cache_control: { type: 'ephemeral' } }],
+      messages: [{ role: 'user', content: JSON.stringify(Object.fromEntries(batch.map((it, i) => [String(i), it.text])), null, 1) }]
+    }).catch(() => '');
+    let map = {};
+    try { map = extractJson(raw); } catch (e) { map = {}; }
+    batch.forEach((it, i) => {
+      const v = map[String(i)];
+      if (v && String(v).trim() && !I18N.hasCjk(v)) { I18N.setPath(a, it.path, String(v).trim()); fixed++; }
+    });
+  }
+  return fixed;
 }
 
 /* One translation at a time per report. The "preparing" page refreshes every few seconds, and
@@ -240,6 +279,20 @@ module.exports = async (req, res) => {
       /* ?prep=zh makes a language ready without showing the report: used in the background right
          after a report is written, and to repair one whose translation stalled. It answers with
          counts only, never content, so it is safe on a locked report. */
+      /* ?scrub=1 rewrites Chinese out of the English source of an existing report (reports
+         written before the check at generation). Counts only, like ?prep=. Translations that
+         picked the Chinese up are redone by ?prep=<locale>, which now treats them as missing. */
+      if (String(req.query.scrub || '') === '1') {
+        res.setHeader('Cache-Control', 'private, no-store, max-age=0');
+        if (!doc.analysis || doc.analysis.error) return res.status(200).json({ rid, scrubbed: 0, reason: 'report not written yet' });
+        const found = I18N.cjkLeaves(doc.analysis).length;
+        const fixed = found ? await scrubCanonical(doc.analysis) : 0;
+        if (fixed) await pushFile(`reports/${rid}.analysis.json`, JSON.stringify(doc, null, 1), `Remove Chinese from English: ${rid}`);
+        const overlays = Object.keys(doc.i18n || {}).filter(l => l !== 'zh' && l !== I18N.CANONICAL)
+          .filter(l => !I18N.isComplete(doc.analysis, doc.i18n[l], l));
+        return res.status(200).json({ rid, found, fixed, remaining: I18N.cjkLeaves(doc.analysis).length, overlaysToRedo: overlays });
+      }
+
       const prep = String(req.query.prep || '').toLowerCase();
       if (prep) {
         res.setHeader('Cache-Control', 'private, no-store, max-age=0');
@@ -252,12 +305,12 @@ module.exports = async (req, res) => {
           kept.forEach(k => I18N.setPath(doc.i18n[prep], k.path, ''));
           delete doc.i18nLog[prep];
         }
-        if (I18N.isComplete(doc.analysis, doc.i18n[prep])) return res.status(200).json({ rid, locale: prep, ready: true });
+        if (I18N.isComplete(doc.analysis, doc.i18n[prep], prep)) return res.status(200).json({ rid, locale: prep, ready: true });
         if (await translationRunning(rid)) return res.status(200).json({ rid, locale: prep, ready: false, reason: 'already translating' });
         const ok = await translateWithLock(doc, rid, prep, 170000)
           .catch((e) => { console.error('prep translation failed:', e && e.message); return false; });
         return res.status(200).json({ rid, locale: prep, ready: !!ok,
-          missing: I18N.missing(doc.analysis, doc.i18n[prep]).length,
+          missing: I18N.missing(doc.analysis, doc.i18n[prep], prep).length,
           keptEnglish: ((doc.i18nLog || {})[prep] || {}).keptEnglish ? doc.i18nLog[prep].keptEnglish.length : 0 });
       }
 
@@ -309,6 +362,10 @@ module.exports = async (req, res) => {
            would bring back a file nothing points to. */
         const still = await getFile(`reports/${rid}.analysis.json`).catch(() => 'unknown');
         if (!still) return res.status(410).send(page('This report was replaced', 'A newer version of this assessment was submitted. Use the link from that one.'));
+        /* Sanity check before saving: no Chinese in the English source. Bounded, so a slow
+           rewrite never costs the report itself; the ?scrub= repair catches anything left. */
+        await Promise.race([scrubCanonical(produced), new Promise(r => setTimeout(r, 25000))])
+          .catch(e => console.error('scrub failed:', e && e.message));
         doc.analysis = produced;
         await pushFile(`reports/${rid}.analysis.json`, JSON.stringify(doc, null, 1),
           `Generate analysis: ${rid}`);
@@ -319,6 +376,12 @@ module.exports = async (req, res) => {
            it was ready. Update it now that there is something real to show. */
         await backfillIndex(rid, produced).catch(e => console.error('index backfill failed:', e && e.message));
         await warmTranslation(rid, 'zh');
+      } else if (!doc.analysis.error && I18N.cjkLeaves(doc.analysis).length) {
+        /* Written before the check, or supplied ready-made by a batch caller: heal on open. */
+        const fixed = await Promise.race([scrubCanonical(doc.analysis), new Promise(r => setTimeout(() => r(0), 20000))])
+          .catch(() => 0);
+        if (fixed) await pushFile(`reports/${rid}.analysis.json`, JSON.stringify(doc, null, 1), `Remove Chinese from English: ${rid}`)
+          .catch(e => console.error('scrub save failed:', e && e.message));
       }
 
       /* The report is locked until a partner opens it (lib/ibo.js). Generation above already
@@ -352,7 +415,7 @@ module.exports = async (req, res) => {
       /* A locale is offered only when it will render completely. A page that is
          half translated is worse than one that is not translated at all, so the
          toggle never points at something that would come back mixed. */
-      const ready = (l) => l === I18N.CANONICAL || I18N.isComplete(doc.analysis, doc.i18n[l]);
+      const ready = (l) => l === I18N.CANONICAL || I18N.isComplete(doc.analysis, doc.i18n[l], l);
 
       let shown = locale;
       if (locale !== I18N.CANONICAL && !ready(locale)) {
