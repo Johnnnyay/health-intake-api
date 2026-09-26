@@ -23,6 +23,9 @@
     },
     "api/event.js": {
       "maxDuration": 20
+    },
+    "api/save-inventory.js": {
+      "maxDuration": 20
     }
   }
 }
