@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const { ghRequest, getFile, pushFile, deleteFile, getIndex, cors, fromKnownOrigin } = require('../lib/github');
 const ibo = require('../lib/ibo');
+const { normalizeEmail } = require('../lib/email');
 
 /* Event pages (glow.html, assess.html on the product site).
 
@@ -33,7 +34,7 @@ function clean(answers) {
     const v = a[k] === undefined || a[k] === null ? '' : String(a[k]).trim().slice(0, max);
     if (v) out[k] = v;
   }
-  if (out.email) out.email = out.email.toLowerCase();
+  if (out.email) out.email = normalizeEmail(out.email);
   return out;
 }
 
@@ -59,7 +60,7 @@ async function healthRows(event) {
     for (const r of client.reports || []) {
       if (r.event !== event) continue;
       rows.push({
-        rid: r.rid, name: client.name, email: client.email || null, date: r.date,
+        rid: r.rid, name: client.name, email: client.email ? normalizeEmail(client.email) : null, date: r.date,
         submittedAt: r.submittedAt || r.date, pending: !!r.pending,
         priorities: r.priorities || [], signals: r.signals || [], products: r.products || [],
       });

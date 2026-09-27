@@ -6,6 +6,7 @@ const crypto = require('crypto');
 const { pushFile: pushPrivate, getIndex: getPrivateIndex, getFile: getPrivateFile, deleteFile, cors } = require('../lib/github');
 const { buildHTML } = require('../lib/render');
 const { CANONICAL } = require('../lib/i18n');
+const { normalizeEmail } = require('../lib/email');
 
 // ─── CONFIG ────────────────────────────────────────────────────────────────
 
@@ -329,6 +330,8 @@ module.exports = async function handler(req, res) {
 
   try {
     const form = req.body;
+    // Correct slips like "gmail.con" before anything is stored under them (lib/email.js).
+    if (form.email) form.email = normalizeEmail(form.email);
 
     if (!form.name || !form.dob || !form.gender) {
       return res.status(400).json({ error: 'Missing required fields: name, dob, gender' });
@@ -454,7 +457,7 @@ module.exports = async function handler(req, res) {
       for (const [ck, c] of Object.entries(index.clients)) {
         const at = (c.reports || []).findIndex(r => r.rid === wantReplace);
         if (at < 0) continue;
-        if (email && String(c.email || '').toLowerCase() === email) {
+        if (email && normalizeEmail(c.email) === email) {
           c.reports.splice(at, 1);
           if (!c.reports.length) delete index.clients[ck];
           replacedRid = wantReplace;

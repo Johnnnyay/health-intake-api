@@ -8,6 +8,7 @@
 // typed into the form, and it is unique.
 
 const { getIndex, cors } = require('../lib/github');
+const { normalizeEmail } = require('../lib/email');
 
 const hits = new Map(); // best-effort per-instance throttle
 
@@ -30,7 +31,8 @@ module.exports = async (req, res) => {
     return res.status(429).json({ error: 'Too many attempts. Wait a minute and try again.' });
   }
 
-  const email = String((req.body && req.body.email) || '').trim().toLowerCase();
+  // Both sides go through the same correction, so "gmail.con" on either one still matches.
+  const email = normalizeEmail((req.body && req.body.email) || '');
   const dob = String((req.body && req.body.dob) || '').trim();
 
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) || !/^\d{4}-\d{2}-\d{2}$/.test(dob)) {
@@ -43,7 +45,7 @@ module.exports = async (req, res) => {
        email instead of the key. Date of birth must also match, so an email alone is
        not enough to retrieve anyone's report. */
     const client = Object.values(index.clients || {}).find(c =>
-      String(c.email || '').trim().toLowerCase() === email && String(c.dob || '') === dob);
+      normalizeEmail(c.email) === email && String(c.dob || '') === dob);
 
     // Same response shape and timing for "wrong details" as for "no reports yet",
     // so this cannot be used to probe which clients exist.
