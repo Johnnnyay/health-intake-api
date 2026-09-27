@@ -1,6 +1,6 @@
 # health-intake-api
 
-Serverless API behind the Wellspring health assessment.
+Serverless API behind the health assessment on the product site.
 
 ```
 intake.html  ->  POST /api/submit  ->  Claude  ->  private repo  ->  emailed token link
