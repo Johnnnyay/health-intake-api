@@ -29,6 +29,9 @@
     },
     "api/save-functions.js": {
       "maxDuration": 20
+    },
+    "api/save-packing.js": {
+      "maxDuration": 20
     }
   }
 }
