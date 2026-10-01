@@ -8,7 +8,10 @@
 // wins, per key, so a phone that was offline can only overwrite what it touched.
 //
 // Body: { checks: { "<tab>-<tripId>|<itemId>|<j|i|s>": { v: true|false, at } },
-//         items:  { "c-<id>": { v: { t, sec, who, tabs }, at } | { reset: true, at } },
+//         items:  { "<itemId>": { v: { t, sec, who, tabs, q?, mode?, note?, removed? }, at } | { reset: true, at } },
+// An items entry is the whole item. For one of the built-in items (ids from data/packing.json) it
+// replaces that item, which is how the page edits or removes them; ids starting "c-" are items
+// Johnny or Irene added. removed: true hides an item but keeps it, so it can be restored.
 //         trips:  { "<tab>": { v: { id, prev, nights, modes }, at } } }   modes: drive, fly, rental
 // A new trip on a tab is a new trip id. The ticks of the trip before it (prev) are kept so the
 // page can undo a reset; anything older is dropped on the next write.
@@ -24,7 +27,8 @@ const TABS = ['day', 'one', 'conf', 'intl'];
 const SECS = ['docs', 'tech', 'clothes', 'toiletries', 'health', 'biz', 'way', 'home'];
 const WHO = ['b', 'j', 'i', 's'];
 const CHECK = /^(day|one|conf|intl)-[a-z0-9]{2,20}\|[a-z0-9-]{2,40}\|[jis]$/;
-const ITEM = /^c-[a-z0-9]{4,24}$/;
+const ITEM = /^[a-z0-9-]{2,40}$/;
+const QTY = ['d', 'n', 'h'];
 const TRIPID = /^[a-z0-9]{2,20}$/;
 const MODES = ['drive', 'fly', 'rental'];
 
@@ -42,11 +46,21 @@ function clean(body) {
     if (e.reset === true) { out.items[k] = { reset: true, at: e.at }; continue; }
     const v = e.v;
     const t = obj(v) && typeof v.t === 'string' ? v.t.trim() : '';
-    if (!t || t.length > 80 || !SECS.includes(v.sec) || !WHO.includes(v.who)
-        || !Array.isArray(v.tabs) || !v.tabs.length || !v.tabs.every((x) => TABS.includes(x))) {
+    const note = obj(v) && typeof v.note === 'string' ? v.note.trim() : '';
+    const mode = obj(v) && Array.isArray(v.mode) ? v.mode : [];
+    if (!t || t.length > 80 || note.length > 120 || !SECS.includes(v.sec) || !WHO.includes(v.who)
+        || !Array.isArray(v.tabs) || !v.tabs.every((x) => TABS.includes(x))
+        || (v.q !== undefined && v.q !== null && v.q !== '' && !QTY.includes(v.q))
+        || !mode.every((m) => MODES.includes(m))
+        || (v.removed !== undefined && typeof v.removed !== 'boolean')) {
       throw new Error('bad item ' + k);
     }
-    out.items[k] = { v: { t, sec: v.sec, who: v.who, tabs: Array.from(new Set(v.tabs)) }, at: e.at };
+    const item = { t, sec: v.sec, who: v.who, tabs: Array.from(new Set(v.tabs)) };
+    if (QTY.includes(v.q)) item.q = v.q;
+    if (mode.length) item.mode = Array.from(new Set(mode));
+    if (note) item.note = note;
+    if (v.removed === true) item.removed = true;
+    out.items[k] = { v: item, at: e.at };
   }
   for (const [k, e] of Object.entries(body.trips || {})) {
     const v = okAt(e) && obj(e.v) ? e.v : null;
