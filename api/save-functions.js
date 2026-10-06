@@ -14,7 +14,11 @@
 // price, confirmation number, who paid, and each person's arrival and departure. Paths look like
 // hotel.main.name, room.m3.slot2, stay.thu.rooms, travel.lister.arrive, others.
 
+// ?doc=finance is HQ › 06 Finance (expenses, tax to-dos, bills), handled in lib/finance-edits.js.
+// It shares this file only to keep the API at 12 functions, the Vercel Hobby limit.
+
 const { ghRequest, cors, fromKnownOrigin } = require('../lib/github');
+const finance = require('../lib/finance-edits');
 
 const HUB_REPO = process.env.HUB_REPO || 'Johnnnyay/diamond-hq';
 const PATH = 'data/functions-edits.json';
@@ -64,10 +68,11 @@ function merge(prev, incoming) {
 module.exports = async (req, res) => {
   cors(req, res);
   if (req.method === 'OPTIONS') return res.status(200).end();
-  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
   if (!fromKnownOrigin(req)) {
     return res.status(403).json({ error: 'This endpoint only accepts writes from the hub.' });
   }
+  if ((req.query && req.query.doc) === 'finance') return finance(req, res);
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   const body = req.body;
   if (!obj(body)) return res.status(400).json({ error: 'Expected { status, paid, board }.' });
