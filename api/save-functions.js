@@ -17,10 +17,12 @@
 // ?doc=finance is HQ › 06 Finance (expenses, tax to-dos, bills), handled in lib/finance-edits.js.
 // It shares this file only to keep the API at 12 functions, the Vercel Hobby limit.
 // ?doc=review is Team Building's "Zoom meetings to check" card, handled in lib/review-edits.js.
+// ?doc=wedding is the wedding task list (ticks, edits, new tasks), handled in lib/wedding-edits.js.
 
 const { ghRequest, cors, fromKnownOrigin } = require('../lib/github');
 const finance = require('../lib/finance-edits');
 const review = require('../lib/review-edits');
+const wedding = require('../lib/wedding-edits');
 
 const HUB_REPO = process.env.HUB_REPO || 'Johnnnyay/diamond-hq';
 const PATH = 'data/functions-edits.json';
@@ -75,6 +77,7 @@ module.exports = async (req, res) => {
   }
   if ((req.query && req.query.doc) === 'finance') return finance(req, res);
   if ((req.query && req.query.doc) === 'review') return review(req, res);
+  if ((req.query && req.query.doc) === 'wedding') return wedding(req, res);
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   const body = req.body;
