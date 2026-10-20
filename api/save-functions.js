@@ -20,12 +20,15 @@
 // ?doc=team-events is the product site's team-event.html (HY team night agendas), handled in
 // lib/team-events.js: anyone reads, the admin login writes.
 // ?doc=wedding is the wedding task list (ticks, edits, new tasks), handled in lib/wedding-edits.js.
+// ?doc=lift is Johnny's workout app (diamond-hq /lift/), synced into the private reports repo with a
+// readable lift/LOG.md, handled in lib/lift.js.
 
 const { ghRequest, cors, fromKnownOrigin } = require('../lib/github');
 const finance = require('../lib/finance-edits');
 const review = require('../lib/review-edits');
 const teamEvents = require('../lib/team-events');
 const wedding = require('../lib/wedding-edits');
+const lift = require('../lib/lift');
 
 const HUB_REPO = process.env.HUB_REPO || 'Johnnnyay/diamond-hq';
 const PATH = 'data/functions-edits.json';
@@ -82,6 +85,7 @@ module.exports = async (req, res) => {
   if ((req.query && req.query.doc) === 'review') return review(req, res);
   if ((req.query && req.query.doc) === 'team-events') return teamEvents(req, res);
   if ((req.query && req.query.doc) === 'wedding') return wedding(req, res);
+  if ((req.query && req.query.doc) === 'lift') return lift(req, res);
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   const body = req.body;
