@@ -19,7 +19,7 @@
 // GET returns the current file straight from GitHub, so the other phone sees a tick within
 // seconds instead of waiting for the site to redeploy.
 
-const { ghRequest, cors, fromKnownOrigin } = require('../lib/github');
+const { ghRequest, cors, fromHub } = require('../lib/github');
 
 const HUB_REPO = process.env.HUB_REPO || 'Johnnnyay/diamond-hq';
 const PATH = 'data/packing-edits.json';
@@ -108,7 +108,7 @@ module.exports = async (req, res) => {
     }
   }
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
-  if (!fromKnownOrigin(req)) {
+  if (!fromHub(req)) {
     return res.status(403).json({ error: 'This endpoint only accepts writes from the hub.' });
   }
   if (!obj(req.body)) return res.status(400).json({ error: 'Expected { checks, items, trips }.' });

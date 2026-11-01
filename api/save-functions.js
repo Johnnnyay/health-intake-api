@@ -24,7 +24,7 @@
 // ?doc=lift is Johnny's workout app (diamond-hq /lift/), synced into the private reports repo with a
 // readable lift/LOG.md, handled in lib/lift.js.
 
-const { ghRequest, cors, fromKnownOrigin } = require('../lib/github');
+const { ghRequest, cors, fromKnownOrigin, fromHub } = require('../lib/github');
 const finance = require('../lib/finance-edits');
 const review = require('../lib/review-edits');
 const teamEvents = require('../lib/team-events');
@@ -80,7 +80,10 @@ function merge(prev, incoming) {
 module.exports = async (req, res) => {
   cors(req, res);
   if (req.method === 'OPTIONS') return res.status(200).end();
-  if (!fromKnownOrigin(req)) {
+  /* Two docs are called from pages with no Google sign-in in front of them: the public Team Event
+     page, and Lift Log (no sign-in by Johnny's choice). Everything else is HQ's, through its Worker. */
+  const openDoc = ['team-events', 'lift'].includes(req.query && req.query.doc);
+  if (!(openDoc ? fromKnownOrigin(req) : fromHub(req))) {
     return res.status(403).json({ error: 'This endpoint only accepts writes from the hub.' });
   }
   if ((req.query && req.query.doc) === 'finance') return finance(req, res);

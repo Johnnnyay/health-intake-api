@@ -7,7 +7,7 @@
 // on screen said the notes were only local. The PV goals added in August made that worse,
 // because they render on the chart and so read as real data.
 
-const { ghRequest, cors, fromKnownOrigin } = require('../lib/github');
+const { ghRequest, cors, fromHub } = require('../lib/github');
 
 const HUB_REPO = process.env.HUB_REPO || 'Johnnnyay/diamond-hq';
 const PATH = 'data/team-notes.json';
@@ -17,7 +17,7 @@ module.exports = async (req, res) => {
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
-  if (!fromKnownOrigin(req)) {
+  if (!fromHub(req)) {
     return res.status(403).json({ error: 'This endpoint only accepts writes from the hub.' });
   }
 

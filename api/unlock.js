@@ -10,6 +10,23 @@ const ibo = require('../lib/ibo');
    POST { action: 'delete', rid }                    admin only: permanently remove one report
    The passcode is checked here, on the server, so a report page never carries it. */
 
+/* Wrong codes per address, 10 per 10 minutes. Best effort: each server instance keeps its own count,
+   so the real protection is a long code. A room of IBOs on one wifi can still mistype a few times. */
+const wrong = new Map();
+const WRONG_MAX = 10, WRONG_WINDOW = 10 * 60 * 1000;
+
+function wrongCount(ip) {
+  const rec = wrong.get(ip);
+  if (!rec || Date.now() - rec.t > WRONG_WINDOW) return 0;
+  return rec.n;
+}
+
+function noteWrong(ip) {
+  if (wrong.size > 5000) wrong.clear();
+  const n = wrongCount(ip);
+  wrong.set(ip, { n: n + 1, t: n ? wrong.get(ip).t : Date.now() });
+}
+
 module.exports = async (req, res) => {
   cors(req, res);
   res.setHeader('Cache-Control', 'private, no-store, max-age=0');
@@ -31,8 +48,13 @@ module.exports = async (req, res) => {
     const action = String(body.action || '');
 
     if (action === 'login') {
+      const ip = String(req.headers['x-forwarded-for'] || 'unknown').split(',')[0].trim();
+      if (wrongCount(ip) >= WRONG_MAX) {
+        return res.status(429).json({ error: 'Too many wrong tries. Wait 10 minutes and try again.' });
+      }
       if (!ibo.codeOk(body.code)) {
-        await new Promise(r => setTimeout(r, 600));   // slows guessing; the code is short
+        noteWrong(ip);
+        await new Promise(r => setTimeout(r, 600));   // slows guessing
         return res.status(401).json({ error: 'Incorrect passcode' });
       }
       ibo.setCookie(res);

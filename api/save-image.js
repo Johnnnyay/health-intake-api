@@ -8,7 +8,7 @@
 // can never collide with someone else's.
 
 const crypto = require('crypto');
-const { ghRequest, cors, fromKnownOrigin } = require('../lib/github');
+const { ghRequest, cors, fromHub } = require('../lib/github');
 
 const HUB_REPO = process.env.HUB_REPO || 'Johnnnyay/diamond-hq';
 const DIR = 'assets/dream/';
@@ -20,7 +20,7 @@ module.exports = async (req, res) => {
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
-  if (!fromKnownOrigin(req)) {
+  if (!fromHub(req)) {
     return res.status(403).json({ error: 'This endpoint only accepts writes from the hub.' });
   }
 

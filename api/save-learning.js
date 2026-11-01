@@ -2,7 +2,7 @@
 // Commits the Learning & Teaching content back into the diamond-hq repo so edits
 // made in the hub outlive the browser they were typed in. Open to the hub's own origin.
 
-const { ghRequest, cors, fromKnownOrigin } = require('../lib/github');
+const { ghRequest, cors, fromHub } = require('../lib/github');
 
 const HUB_REPO = process.env.HUB_REPO || 'Johnnnyay/diamond-hq';
 const PATH = (t) => 'data/learning-' + t + '.json';
@@ -12,7 +12,7 @@ module.exports = async (req, res) => {
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
-  if (!fromKnownOrigin(req)) {
+  if (!fromHub(req)) {
     return res.status(403).json({ error: 'This endpoint only accepts writes from the hub.' });
   }
 
