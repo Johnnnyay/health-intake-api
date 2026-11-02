@@ -11,7 +11,7 @@ const { normalizeEmail } = require('../lib/email');
 // ─── CONFIG ────────────────────────────────────────────────────────────────
 
 const GITHUB_REPO = 'johnnnyay/product-marketing';
-const CALC_BASE = 'https://johnnnyay.github.io/product-marketing/#s=';
+const CALC_BASE = 'https://healthcare.unityhyventures.com/#s=';
 // Reports are served through this API from a private repo, never as public files.
 const REPORT_BASE = (process.env.API_BASE || 'https://health-intake-api.vercel.app') + '/api/report?r=';
 
