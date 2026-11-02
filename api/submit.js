@@ -17,7 +17,8 @@ const REPORT_BASE = (process.env.API_BASE || 'https://health-intake-api.vercel.a
 
 // ─── PRODUCT CATALOGUE (fetched at request time — never hardcoded) ─────────
 
-const SITE = 'https://johnnnyay.github.io/product-marketing';
+// Raw repo files, not the Pages address: getJSON follows no redirects, and Pages redirects once a custom domain is set.
+const SITE = 'https://raw.githubusercontent.com/Johnnnyay/product-marketing/main';
 
 function getJSON(url) {
   return new Promise((resolve, reject) => {
