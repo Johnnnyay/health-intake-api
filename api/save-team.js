@@ -36,6 +36,13 @@ module.exports = async (req, res) => {
   const candidates = body.candidates || {};
   const count = Object.keys(body.people).length;
   const cCount = Object.keys(candidates).length;
+  // The org chart drawing he edits by hand (2026-11-06): circles he adds, names he types over,
+  // line styles, people he hides. Only plain objects of short strings and flags get through.
+  if (body.chart !== undefined && !obj(body.chart)) {
+    return res.status(400).json({ error: 'chart must be an object.' });
+  }
+  const chart = cleanChart(body.chart || {});
+  const chCount = Object.keys(chart.add).length + Object.keys(chart.edit).length;
 
   try {
     const head = await ghRequest('GET', PATH, null, HUB_REPO);
@@ -44,11 +51,12 @@ module.exports = async (req, res) => {
     // An empty payload over an existing file is almost always a browser that lost its
     // localStorage, not a deliberate wipe. Refuse it. Deleting every note is then a
     // deliberate act against the repo rather than something a cleared cache can do.
-    if (count === 0 && cCount === 0 && head.status === 200) {
+    if (count === 0 && cCount === 0 && chCount === 0 && head.status === 200) {
       let prev = 0;
       try {
         const j = JSON.parse(Buffer.from(head.data.content, 'base64').toString('utf8'));
-        prev = Object.keys(j.people || {}).length + Object.keys(j.candidates || {}).length;
+        prev = Object.keys(j.people || {}).length + Object.keys(j.candidates || {}).length
+          + Object.keys((j.chart || {}).add || {}).length + Object.keys((j.chart || {}).edit || {}).length;
       } catch (e) {}
       if (prev > 0) {
         return res.status(409).json({
@@ -58,7 +66,7 @@ module.exports = async (req, res) => {
       }
     }
 
-    const out = { people: body.people, candidates, count, candidateCount: cCount,
+    const out = { people: body.people, candidates, chart, count, candidateCount: cCount,
                   savedAt: new Date().toISOString(), savedFrom: 'hub' };
 
     const put = await ghRequest('PUT', PATH, {
@@ -79,3 +87,25 @@ module.exports = async (req, res) => {
     return res.status(500).json({ error: 'Save failed', detail: err.message });
   }
 };
+
+const ID = /^[A-Za-z0-9_-]{1,80}$/;
+const STYLES = ['', 'solid', 'bold', 'dotted', 'dashed'];
+const str = (v, n) => (typeof v === 'string' ? v.slice(0, n) : '');
+function cleanChart(c) {
+  const out = { add: {}, edit: {} };
+  const o = (v) => (typeof v === 'object' && v !== null && !Array.isArray(v)) ? v : {};
+  for (const [id, a] of Object.entries(o(c.add)).slice(0, 300)) {
+    if (!ID.test(id) || !ID.test(str(o(a).parent, 80))) continue;
+    out.add[id] = { parent: a.parent, mkt: str(a.mkt, 8) || 'us', name: str(a.name, 40),
+      style: STYLES.includes(a.style) ? a.style : 'dashed', at: str(a.at, 30) };
+  }
+  for (const [id, e] of Object.entries(o(c.edit)).slice(0, 300)) {
+    if (!ID.test(id)) continue;
+    const x = {};
+    if (str(o(e).name, 40)) x.name = str(e.name, 40);
+    if (STYLES.includes(o(e).style) && e.style) x.style = e.style;
+    if (o(e).hidden === true) x.hidden = true;
+    if (Object.keys(x).length) out.edit[id] = x;
+  }
+  return out;
+}
