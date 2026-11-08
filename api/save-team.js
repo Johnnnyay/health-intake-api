@@ -42,7 +42,7 @@ module.exports = async (req, res) => {
     return res.status(400).json({ error: 'chart must be an object.' });
   }
   const chart = cleanChart(body.chart || {});
-  const chCount = Object.keys(chart.add).length + Object.keys(chart.edit).length;
+  const chCount = Object.keys(chart.add).length + Object.keys(chart.edit).length + Object.keys(chart.versions).length;
 
   try {
     const head = await ghRequest('GET', PATH, null, HUB_REPO);
@@ -56,7 +56,8 @@ module.exports = async (req, res) => {
       try {
         const j = JSON.parse(Buffer.from(head.data.content, 'base64').toString('utf8'));
         prev = Object.keys(j.people || {}).length + Object.keys(j.candidates || {}).length
-          + Object.keys((j.chart || {}).add || {}).length + Object.keys((j.chart || {}).edit || {}).length;
+          + Object.keys((j.chart || {}).add || {}).length + Object.keys((j.chart || {}).edit || {}).length
+          + Object.keys((j.chart || {}).versions || {}).length;
       } catch (e) {}
       if (prev > 0) {
         return res.status(409).json({
@@ -89,11 +90,16 @@ module.exports = async (req, res) => {
 };
 
 const ID = /^[A-Za-z0-9_-]{1,80}$/;
+const MONTH = /^\d{4}-\d{2}$/;
 const STYLES = ['', 'solid', 'bold', 'dotted', 'dashed'];
+// Ring and line classes a saved month-end circle may carry. Anything else is dropped, and the page
+// escapes every name it draws, so a stored version can never carry markup.
+const CLS = ['root', 'blank', 'inactive', 'todo', 'isnew', 'deep', 'nl', 'ph', 'added',
+             'st-solid', 'st-bold', 'st-dotted', 'st-dashed'];
 const str = (v, n) => (typeof v === 'string' ? v.slice(0, n) : '');
+const o = (v) => (typeof v === 'object' && v !== null && !Array.isArray(v)) ? v : {};
 function cleanChart(c) {
-  const out = { add: {}, edit: {} };
-  const o = (v) => (typeof v === 'object' && v !== null && !Array.isArray(v)) ? v : {};
+  const out = { add: {}, edit: {}, versions: {} };
   for (const [id, a] of Object.entries(o(c.add)).slice(0, 300)) {
     if (!ID.test(id) || !ID.test(str(o(a).parent, 80))) continue;
     out.add[id] = { parent: a.parent, mkt: str(a.mkt, 8) || 'us', name: str(a.name, 40),
@@ -105,7 +111,33 @@ function cleanChart(c) {
     if (str(o(e).name, 40)) x.name = str(e.name, 40);
     if (STYLES.includes(o(e).style) && e.style) x.style = e.style;
     if (o(e).hidden === true) x.hidden = true;
+    // Moved under someone else on the drawing (2026-11-09). The LOS keeps the real sponsor.
+    if (ID.test(str(o(e).parent, 80)) && e.parent !== id) x.parent = e.parent;
     if (Object.keys(x).length) out.edit[id] = x;
   }
+  // The month the live chart belongs to, and the function the star tracks ('' = the next one).
+  if (MONTH.test(str(c.month, 7))) out.month = c.month;
+  if (ID.test(str(c.track, 80))) out.track = c.track;
+  // Month-end versions (2026-11-09): a frozen copy of the chart as it stood when the month ended,
+  // so the next month's edits never change it. Data only: ids, names, numbers, ring classes.
+  for (const [m, v] of Object.entries(o(c.versions)).filter(([m]) => MONTH.test(m)).sort().slice(-60)) {
+    const meta = o(o(v).meta), mk = {};
+    for (const [k, arr] of Object.entries(o(o(v).mk)).slice(0, 8)) {
+      if (!/^[a-z]{2,8}$/.test(k) || !Array.isArray(arr)) continue;
+      mk[k] = arr.slice(0, 400).map(cleanNode).filter(Boolean);
+    }
+    out.versions[m] = { meta: { month: m, period: str(meta.period, 8), exported: str(meta.exported, 10),
+      event: str(meta.event, 80), savedAt: str(meta.savedAt, 30) }, mk };
+  }
   return out;
+}
+function cleanNode(n) {
+  n = o(n);
+  const id = str(n.id, 80);
+  if (!ID.test(id)) return null;
+  const p = str(n.p, 80), op = str(n.o, 80);
+  return { id, p: ID.test(p) ? p : '', n: (Array.isArray(n.n) ? n.n : []).slice(0, 3).map((x) => str(x, 60)),
+    pv: str(n.pv, 8), pg: str(n.pg, 8),
+    c: str(n.c, 160).split(' ').filter((x) => CLS.includes(x)).join(' '),
+    star: n.star ? 1 : 0, td: Math.max(0, Math.min(99, parseInt(n.td, 10) || 0)), o: ID.test(op) ? op : '' };
 }
