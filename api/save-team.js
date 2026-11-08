@@ -95,15 +95,24 @@ const STYLES = ['', 'solid', 'bold', 'dotted', 'dashed'];
 // Ring and line classes a saved month-end circle may carry. Anything else is dropped, and the page
 // escapes every name it draws, so a stored version can never carry markup.
 const CLS = ['root', 'blank', 'inactive', 'todo', 'isnew', 'deep', 'nl', 'ph', 'added',
-             'st-solid', 'st-bold', 'st-dotted', 'st-dashed'];
+             'st-solid', 'st-bold', 'st-dotted', 'st-dashed', 's-nl', 's-a', 's-b', 's-d90', 's-slot'];
+// The stage a circle is drawn with (2026-11-09): new launch, Phase A, Phase B, 90 DCR.
+const STAGES = ['nl', 'a', 'b', 'd90'];
+const NUM = /^\d{1,6}(\.\d{0,2})?$/;
 const str = (v, n) => (typeof v === 'string' ? v.slice(0, n) : '');
 const o = (v) => (typeof v === 'object' && v !== null && !Array.isArray(v)) ? v : {};
 function cleanChart(c) {
   const out = { add: {}, edit: {}, versions: {} };
   for (const [id, a] of Object.entries(o(c.add)).slice(0, 300)) {
     if (!ID.test(id) || !ID.test(str(o(a).parent, 80))) continue;
-    out.add[id] = { parent: a.parent, mkt: str(a.mkt, 8) || 'us', name: str(a.name, 40),
-      style: STYLES.includes(a.style) ? a.style : 'dashed', at: str(a.at, 30) };
+    const x = { parent: a.parent, mkt: str(a.mkt, 8) || 'us', name: str(a.name, 40), at: str(a.at, 30) };
+    // A circle he added has no LOS record, so its stage, PV and goal live here.
+    if (STAGES.includes(a.stage)) x.stage = a.stage;
+    if (NUM.test(str(a.pv, 9))) x.pv = a.pv;
+    if (NUM.test(str(a.pg, 9))) x.pg = a.pg;
+    // Line styles from before stages. The page turns them into stages on its next load.
+    if (STYLES.includes(a.style) && a.style) x.style = a.style;
+    out.add[id] = x;
   }
   for (const [id, e] of Object.entries(o(c.edit)).slice(0, 300)) {
     if (!ID.test(id)) continue;
