@@ -122,6 +122,8 @@ function cleanChart(c) {
     if (!ID.test(id)) continue;
     const x = {};
     if (str(o(e).name, 40)) x.name = str(e.name, 40);
+    // Their name as the LOS export spells it, typed on the card to fix a spelling the ingest misses.
+    if (str(o(e).legal, 60).trim()) x.legal = str(e.legal, 60).trim();
     if (STYLES.includes(o(e).style) && e.style) x.style = e.style;
     if (o(e).hidden === true) x.hidden = true;
     // Moved under someone else on the drawing (2026-11-09). The LOS keeps the real sponsor.
