@@ -110,6 +110,10 @@ function cleanChart(c) {
     if (STAGES.includes(a.stage)) x.stage = a.stage;
     if (NUM.test(str(a.pv, 9))) x.pv = a.pv;
     if (NUM.test(str(a.pg, 9))) x.pg = a.pg;
+    // The export a typed PV was typed against: a newer export's own PV replaces it.
+    if (/^\d{4}-\d{2}-\d{2}$/.test(str(a.pvAt, 10))) x.pvAt = a.pvAt;
+    // Their name as the LOS export spells it, so the ingest's leftover rows can be matched to it.
+    if (str(a.legal, 60).trim()) x.legal = str(a.legal, 60).trim();
     // Line styles from before stages. The page turns them into stages on its next load.
     if (STYLES.includes(a.style) && a.style) x.style = a.style;
     out.add[id] = x;
