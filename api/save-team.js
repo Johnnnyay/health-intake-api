@@ -102,7 +102,24 @@ const NUM = /^\d{1,6}(\.\d{0,2})?$/;
 const str = (v, n) => (typeof v === 'string' ? v.slice(0, n) : '');
 const o = (v) => (typeof v === 'object' && v !== null && !Array.isArray(v)) ? v : {};
 function cleanChart(c) {
-  const out = { add: {}, edit: {}, versions: {} };
+  const out = cleanDrawing(c);
+  out.versions = {};
+  // Next month's draft (2026-11-15): only what it changes against the live chart. The page applies it
+  // on the first load of that month, after freezing the month before. A null edit removes one.
+  const n = o(c.next);
+  if (MONTH.test(str(n.month, 7))) {
+    const d = cleanDrawing(n);
+    const drop = (Array.isArray(n.drop) ? n.drop : []).filter((i) => ID.test(str(i, 80))).slice(0, 300);
+    for (const [id, e] of Object.entries(o(n.edit)).slice(0, 300)) {
+      if (ID.test(id) && e === null) d.edit[id] = null;
+    }
+    out.next = { month: n.month, add: d.add, drop, edit: d.edit };
+  }
+  return Object.assign(out, cleanRest(c));
+}
+// Added circles and edits, for the live chart and for next month's draft alike.
+function cleanDrawing(c) {
+  const out = { add: {}, edit: {} };
   for (const [id, a] of Object.entries(o(c.add)).slice(0, 300)) {
     if (!ID.test(id) || !ID.test(str(o(a).parent, 80))) continue;
     const x = { parent: a.parent, mkt: str(a.mkt, 8) || 'us', name: str(a.name, 40), at: str(a.at, 30) };
@@ -130,6 +147,10 @@ function cleanChart(c) {
     if (ID.test(str(o(e).parent, 80)) && e.parent !== id) x.parent = e.parent;
     if (Object.keys(x).length) out.edit[id] = x;
   }
+  return out;
+}
+function cleanRest(c) {
+  const out = { versions: {} };
   // The month the live chart belongs to, and the function the star tracks ('' = the next one).
   if (MONTH.test(str(c.month, 7))) out.month = c.month;
   if (ID.test(str(c.track, 80))) out.track = c.track;
