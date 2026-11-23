@@ -23,6 +23,8 @@
 // ?doc=attire is the wedding attire contact tracker (attire.html#tracker), handled in lib/attire-edits.js.
 // ?doc=lift is Johnny's workout app (diamond-hq /lift/), synced into the private reports repo with a
 // readable lift/LOG.md, handled in lib/lift.js.
+// ?doc=gala is the year-end gala show board on team.unityhyventures.com (propose shows, red and
+// white hearts, sign up to perform), stored in the private reports repo, handled in lib/gala.js.
 
 const { ghRequest, cors, fromKnownOrigin, fromHub } = require('../lib/github');
 const finance = require('../lib/finance-edits');
@@ -31,6 +33,7 @@ const teamEvents = require('../lib/team-events');
 const wedding = require('../lib/wedding-edits');
 const attire = require('../lib/attire-edits');
 const lift = require('../lib/lift');
+const gala = require('../lib/gala');
 
 const HUB_REPO = process.env.HUB_REPO || 'Johnnnyay/diamond-hq';
 const PATH = 'data/functions-edits.json';
@@ -82,7 +85,7 @@ module.exports = async (req, res) => {
   if (req.method === 'OPTIONS') return res.status(200).end();
   /* Two docs are called from pages with no Google sign-in in front of them: the public Team Event
      page, and Lift Log (no sign-in by Johnny's choice). Everything else is HQ's, through its Worker. */
-  const openDoc = ['team-events', 'lift'].includes(req.query && req.query.doc);
+  const openDoc = ['team-events', 'lift', 'gala'].includes(req.query && req.query.doc);
   if (!(openDoc ? fromKnownOrigin(req) : fromHub(req))) {
     return res.status(403).json({ error: 'This endpoint only accepts writes from the hub.' });
   }
@@ -92,6 +95,7 @@ module.exports = async (req, res) => {
   if ((req.query && req.query.doc) === 'wedding') return wedding(req, res);
   if ((req.query && req.query.doc) === 'attire') return attire(req, res);
   if ((req.query && req.query.doc) === 'lift') return lift(req, res);
+  if ((req.query && req.query.doc) === 'gala') return gala(req, res);
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   const body = req.body;
